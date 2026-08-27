@@ -1,34 +1,62 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { VoiceSettings } from "../types";
-import { Camera, Eye, RefreshCw, Sparkles, Video, AlertCircle, Radio } from "lucide-react";
+import {
+  Camera,
+  Eye,
+  AlertCircle,
+  CheckCircle2,
+  Video,
+  ShieldAlert,
+  Cpu,
+  Layers,
+  Activity,
+} from "lucide-react";
+import { DetectedObject } from "../core/types";
 
 interface VisionCanvasProps {
   voiceSettings: VoiceSettings;
   onAnalyzeFrame: (customPrompt?: string, imageBase64?: string) => void;
   isAnalyzing: boolean;
+  onCameraStatusChange?: (status: "READY" | "ACTIVE" | "WAITING_PERMISSION" | "NOT_CONNECTED" | "ERROR", deviceName?: string) => void;
+  onDetectionsUpdated?: (objects: DetectedObject[]) => void;
 }
 
 export const VisionCanvas: React.FC<VisionCanvasProps> = ({
   voiceSettings,
   onAnalyzeFrame,
   isAnalyzing,
+  onCameraStatusChange,
+  onDetectionsUpdated,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const [streamActive, setStreamActive] = useState<boolean>(false);
-  const [streamMode, setStreamMode] = useState<"hardware" | "synthetic">("hardware");
-  const [streamError, setStreamError] = useState<string | null>(null);
-  const [autoScan, setAutoScan] = useState<boolean>(false);
-  const [scanIntervalSeconds, setScanIntervalSeconds] = useState<number>(5);
+  // Perception Subsystem State: INITIALIZING | READY | ACTIVE | WAITING_PERMISSION | ERROR
+  const [perceptionState, setPerceptionState] = useState<
+    "INITIALIZING" | "READY" | "ACTIVE" | "WAITING_PERMISSION" | "NOT_CONNECTED" | "ERROR"
+  >("INITIALIZING");
 
+  // Hardware Source: 'REAL_WEBCAM' vs 'SYNTHETIC_TEST_BENCH'
+  const [hardwareSource, setHardwareSource] = useState<"REAL_WEBCAM" | "SYNTHETIC_TEST_BENCH">("SYNTHETIC_TEST_BENCH");
+  const [activeDeviceLabel, setActiveDeviceLabel] = useState<string>("");
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Continuous background perception loop interval (seconds)
+  const [perceptionIntervalSec, setPerceptionIntervalSec] = useState<number>(2.5);
+  const [fps, setFps] = useState<number>(0);
+  const [lastFrameTimestamp, setLastFrameTimestamp] = useState<string>("");
 
   const animIdRef = useRef<number | null>(null);
   const syntheticCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const isAnalyzingRef = useRef<boolean>(isAnalyzing);
 
-  // Helper to check if a camera device should be excluded (e.g. OBS Virtual Camera)
+  useEffect(() => {
+    isAnalyzingRef.current = isAnalyzing;
+  }, [isAnalyzing]);
+
+  // Check if camera should be excluded (e.g. OBS virtual camera)
   const isExcludedCamera = (label?: string) => {
     if (!label) return false;
     const l = label.toLowerCase();
@@ -36,249 +64,240 @@ export const VisionCanvas: React.FC<VisionCanvasProps> = ({
       l.includes("obs virtual camera") ||
       l.includes("obs-camera") ||
       l.includes("obs virtual") ||
-      l.includes("obs-virtual") ||
-      l.includes("obs ") ||
-      l.startsWith("obs")
+      l.includes("obs-virtual")
     );
   };
 
-  // Enumerate all available camera devices
+  // Enumerate physical camera devices
   const enumerateCameras = useCallback(async () => {
-    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const allVideoInputs = devices.filter((d) => d.kind === "videoinput");
-        // Filter out OBS virtual cameras, keep physical cameras like USB2.0 HD UVC Webcam
-        const filteredCameras = allVideoInputs.filter((d) => !isExcludedCamera(d.label));
-        setVideoDevices(filteredCameras);
-        if (filteredCameras.length > 0) {
-          // If USB2.0 HD UVC Webcam is found and no specific device selected yet, prioritize it
-          const usbCam = filteredCameras.find(
-            (c) => c.label && (c.label.toLowerCase().includes("usb2.0") || c.label.toLowerCase().includes("uvc"))
-          );
-          if (!selectedDeviceId || !filteredCameras.some((c) => c.deviceId === selectedDeviceId)) {
-            setSelectedDeviceId(usbCam ? usbCam.deviceId : filteredCameras[0].deviceId);
-          }
-        } else if (allVideoInputs.length === 0) {
-          setVideoDevices([]);
-        }
-      } catch (e) {
-        console.warn("Could not enumerate camera devices:", e);
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+      return;
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === "videoinput" && !isExcludedCamera(d.label));
+      setVideoDevices(videoInputs);
+
+      if (videoInputs.length > 0 && !selectedDeviceId) {
+        // Look for USB2.0 HD UVC Webcam or physical webcam first
+        const preferred = videoInputs.find(
+          (d) => d.label.toLowerCase().includes("usb") || d.label.toLowerCase().includes("uvc")
+        );
+        setSelectedDeviceId(preferred ? preferred.deviceId : videoInputs[0].deviceId);
       }
+    } catch (e) {
+      console.warn("Camera device enumeration notice:", e);
     }
   }, [selectedDeviceId]);
 
-  useEffect(() => {
-    enumerateCameras();
-  }, [enumerateCameras]);
-
-  // Function to start synthetic animated camera stream as automatic fallback
-  const startSyntheticCameraStream = useCallback(() => {
-    try {
-      if (animIdRef.current) {
-        cancelAnimationFrame(animIdRef.current);
-        animIdRef.current = null;
-      }
-
-      let animCanvas = syntheticCanvasRef.current;
-      if (!animCanvas) {
-        animCanvas = document.createElement("canvas");
-        animCanvas.width = 640;
-        animCanvas.height = 360;
-        syntheticCanvasRef.current = animCanvas;
-      }
-
-      const ctx = animCanvas.getContext("2d");
-      if (!ctx) return false;
-
-      let frameCount = 0;
-
-      const drawFrame = () => {
-        frameCount++;
-        const time = frameCount * 0.03;
-
-        // Background indoor/outdoor hallway environment simulation
-        ctx.fillStyle = "#090d16";
-        ctx.fillRect(0, 0, 640, 360);
-
-        // Perspective grid lines (hallway floor)
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.25)";
-        ctx.lineWidth = 1.5;
-        const horizonY = 140;
-
-        // Perspective floor
-        ctx.beginPath();
-        ctx.moveTo(0, 360);
-        ctx.lineTo(260, horizonY);
-        ctx.lineTo(380, horizonY);
-        ctx.lineTo(640, 360);
-        ctx.fillStyle = "#0f172a";
-        ctx.fill();
-        ctx.stroke();
-
-        // Moving floor grid lines to simulate walking forward
-        const numLines = 6;
-        for (let i = 0; i < numLines; i++) {
-          const progress = ((time * 0.8 + i / numLines) % 1);
-          const lineY = horizonY + progress * (360 - horizonY);
-          const startX = 260 - progress * 260;
-          const endX = 380 + progress * 260;
-
-          ctx.beginPath();
-          ctx.moveTo(startX, lineY);
-          ctx.lineTo(endX, lineY);
-          ctx.strokeStyle = `rgba(56, 189, 248, ${0.1 + progress * 0.4})`;
-          ctx.stroke();
-        }
-
-        // Simulated obstacle object in center (e.g. walking path marker)
-        const objZ = ((time * 0.5) % 1);
-        const objY = horizonY + objZ * (300 - horizonY);
-        const objScale = 0.2 + objZ * 0.9;
-        const objWidth = 60 * objScale;
-        const objHeight = 80 * objScale;
-        const objX = 320 + Math.sin(time * 0.5) * 40 - objWidth / 2;
-
-        ctx.fillStyle = "rgba(239, 68, 68, 0.85)";
-        ctx.fillRect(objX, objY - objHeight, objWidth, objHeight);
-        ctx.strokeStyle = "#f87171";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(objX, objY - objHeight, objWidth, objHeight);
-
-        // Simulated text marker on object
-        ctx.fillStyle = "#ffffff";
-        ctx.font = `bold ${Math.max(10, Math.floor(12 * objScale))}px sans-serif`;
-        ctx.fillText("HAZARD: CHAIR", objX, objY - objHeight - 8);
-
-        // HUD overlay text on feed
-        ctx.fillStyle = "rgba(16, 185, 129, 0.9)";
-        ctx.font = "bold 13px monospace";
-        ctx.fillText("LIVE VISION FEED [SIMULATED CAM]", 20, 30);
-        ctx.fillStyle = "#94a3b8";
-        ctx.font = "11px monospace";
-        ctx.fillText(`FPS: 30 | TIMESTAMP: ${new Date().toLocaleTimeString()}`, 20, 48);
-
-        animIdRef.current = requestAnimationFrame(drawFrame);
-      };
-
-      drawFrame();
-
-      const stream = animCanvas.captureStream(30);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-        setStreamActive(true);
-        setStreamMode("synthetic");
-        setStreamError(null);
-        return true;
-      }
-    } catch (e) {
-      console.warn("Synthetic stream creation failed:", e);
-    }
-    return false;
-  }, []);
-
-  // Function to initialize persistent camera stream via MediaDevices API with fallbacks
-  const startCameraStream = useCallback(async (deviceIdToUse?: string) => {
-    setStreamError(null);
-
-    if (videoRef.current) {
-      videoRef.current.muted = true;
-      videoRef.current.autoplay = true;
-      videoRef.current.playsInline = true;
-    }
-
-    let stream: MediaStream | null = null;
-
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      // Stop existing tracks if any
-      if (videoRef.current && videoRef.current.srcObject) {
-        const currentStream = videoRef.current.srcObject as MediaStream;
-        currentStream.getTracks().forEach((t) => t.stop());
-      }
-
-      const targetDeviceId = deviceIdToUse || selectedDeviceId;
-
-      // Tier 1: Try specific device or back camera
-      try {
-        const videoConstraints: any = targetDeviceId
-          ? { deviceId: { exact: targetDeviceId } }
-          : { facingMode: { ideal: "environment" } };
-
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: videoConstraints,
-          audio: false,
-        });
-      } catch {
-        try {
-          // Tier 2: Try front user camera
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user" },
-            audio: false,
-          });
-        } catch {
-          try {
-            // Tier 3: Basic generic video
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: true,
-              audio: false,
-            });
-          } catch {
-            stream = null;
-          }
-        }
-      }
-    }
-
-    if (stream && videoRef.current) {
-      try {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setStreamActive(true);
-        setStreamMode("hardware");
-        setStreamError(null);
-        enumerateCameras();
-        return;
-      } catch {
-        // Fall through to synthetic stream
-      }
-    }
-
-    // Auto-fallback to live synthetic camera feed
-    const syntheticSuccess = startSyntheticCameraStream();
-    if (!syntheticSuccess) {
-      setStreamActive(false);
-      setStreamError(
-        "Camera hardware not detected or permissions blocked. Click 'Connect Camera & Retry' or open app in a new tab."
-      );
-    }
-  }, [selectedDeviceId, startSyntheticCameraStream, enumerateCameras]);
-
-  const stopCameraStream = useCallback(() => {
+  // Draw Synthetic Test Bench (Clearly marked as simulation for honest diagnostics)
+  const startSyntheticTestBench = useCallback(() => {
     if (animIdRef.current) {
       cancelAnimationFrame(animIdRef.current);
       animIdRef.current = null;
     }
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
-    setStreamActive(false);
-    setAutoScan(false);
-  }, []);
 
-  // Auto start camera stream on component mount
+    let animCanvas = syntheticCanvasRef.current;
+    if (!animCanvas) {
+      animCanvas = document.createElement("canvas");
+      animCanvas.width = 640;
+      animCanvas.height = 360;
+      syntheticCanvasRef.current = animCanvas;
+    }
+
+    const ctx = animCanvas.getContext("2d");
+    if (!ctx) return false;
+
+    let frameCount = 0;
+    let lastFpsCheck = performance.now();
+    let framesThisSec = 0;
+
+    const drawFrame = () => {
+      frameCount++;
+      framesThisSec++;
+      const now = performance.now();
+      if (now - lastFpsCheck >= 1000) {
+        setFps(framesThisSec);
+        framesThisSec = 0;
+        lastFpsCheck = now;
+      }
+
+      const time = frameCount * 0.025;
+
+      // Dark test bench corridor
+      ctx.fillStyle = "#090d16";
+      ctx.fillRect(0, 0, 640, 360);
+
+      // Floor perspective
+      const horizonY = 135;
+      ctx.beginPath();
+      ctx.moveTo(0, 360);
+      ctx.lineTo(250, horizonY);
+      ctx.lineTo(390, horizonY);
+      ctx.lineTo(640, 360);
+      ctx.fillStyle = "#0f172a";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.3)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Moving floor lines to simulate walking forward
+      const numLines = 6;
+      for (let i = 0; i < numLines; i++) {
+        const progress = (time * 0.7 + i / numLines) % 1;
+        const lineY = horizonY + progress * (360 - horizonY);
+        const startX = 250 - progress * 250;
+        const endX = 390 + progress * 250;
+
+        ctx.beginPath();
+        ctx.moveTo(startX, lineY);
+        ctx.lineTo(endX, lineY);
+        ctx.strokeStyle = `rgba(56, 189, 248, ${0.1 + progress * 0.4})`;
+        ctx.stroke();
+      }
+
+      // Simulated Obstacle (Chair / Obstacle on path)
+      const objZ = (time * 0.45) % 1;
+      const objY = horizonY + objZ * (300 - horizonY);
+      const objScale = 0.25 + objZ * 0.9;
+      const objWidth = 65 * objScale;
+      const objHeight = 85 * objScale;
+      const objX = 320 + Math.sin(time * 0.4) * 35 - objWidth / 2;
+
+      // Draw obstacle box
+      ctx.fillStyle = "rgba(239, 68, 68, 0.85)";
+      ctx.fillRect(objX, objY - objHeight, objWidth, objHeight);
+      ctx.strokeStyle = "#f87171";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(objX, objY - objHeight, objWidth, objHeight);
+
+      // Label on obstacle
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold ${Math.max(10, Math.floor(13 * objScale))}px sans-serif`;
+      ctx.fillText("OBJECT: CHAIR", objX, objY - objHeight - 6);
+
+      // Simulation Diagnostic HUD
+      ctx.fillStyle = "rgba(251, 191, 36, 0.9)";
+      ctx.font = "bold 12px monospace";
+      ctx.fillText("TEST BENCH SIMULATION [NO REAL WEBCAM PERMITTED YET]", 16, 26);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "10px monospace";
+      ctx.fillText(`TIMECODE: ${new Date().toLocaleTimeString()} | CORRIDOR TEST SCENE`, 16, 42);
+
+      animIdRef.current = requestAnimationFrame(drawFrame);
+    };
+
+    drawFrame();
+
+    const stream = animCanvas.captureStream(30);
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(() => {});
+      setPerceptionState("ACTIVE");
+      setHardwareSource("SYNTHETIC_TEST_BENCH");
+      setActiveDeviceLabel("Synthetic Test Bench (Emulated)");
+      if (onCameraStatusChange) {
+        onCameraStatusChange("ACTIVE", "Synthetic Test Bench");
+      }
+      return true;
+    }
+    return false;
+  }, [onCameraStatusChange]);
+
+  // Initialize Real Physical Camera Stream via MediaDevices
+  const initializeRealCamera = useCallback(
+    async (deviceIdToUse?: string) => {
+      setErrorMessage(null);
+      setPerceptionState("INITIALIZING");
+
+      if (videoRef.current) {
+        videoRef.current.muted = true;
+        videoRef.current.autoplay = true;
+        videoRef.current.playsInline = true;
+      }
+
+      let stream: MediaStream | null = null;
+      const targetDeviceId = deviceIdToUse || selectedDeviceId;
+
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        // Stop any active stream first
+        if (videoRef.current && videoRef.current.srcObject) {
+          const s = videoRef.current.srcObject as MediaStream;
+          s.getTracks().forEach((t) => t.stop());
+        }
+
+        try {
+          // Attempt 1: Target specific camera / back camera
+          const constraints: any = targetDeviceId
+            ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } };
+
+          stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+        } catch {
+          try {
+            // Attempt 2: Generic user-facing webcam
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          } catch (permErr: any) {
+            console.warn("Real camera access blocked or unavailable:", permErr);
+            stream = null;
+          }
+        }
+      }
+
+      if (stream && videoRef.current) {
+        try {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+
+          const track = stream.getVideoTracks()[0];
+          const deviceLabel = track?.label || "Real Physical Webcam";
+
+          setPerceptionState("ACTIVE");
+          setHardwareSource("REAL_WEBCAM");
+          setActiveDeviceLabel(deviceLabel);
+          setErrorMessage(null);
+
+          if (onCameraStatusChange) {
+            onCameraStatusChange("ACTIVE", deviceLabel);
+          }
+
+          enumerateCameras();
+          return;
+        } catch (e: any) {
+          console.warn("Video playback start error:", e);
+        }
+      }
+
+      // If browser permission is blocked, inform user honestly and start test bench
+      setPerceptionState("WAITING_PERMISSION");
+      setErrorMessage("Browser security requires camera permission to access physical webcam stream.");
+      if (onCameraStatusChange) {
+        onCameraStatusChange("WAITING_PERMISSION");
+      }
+      startSyntheticTestBench();
+    },
+    [selectedDeviceId, startSyntheticTestBench, onCameraStatusChange, enumerateCameras]
+  );
+
+  // Automatic Camera Startup on Component Mount
   useEffect(() => {
-    startCameraStream();
+    initializeRealCamera();
 
     return () => {
-      stopCameraStream();
+      if (animIdRef.current) {
+        cancelAnimationFrame(animIdRef.current);
+        animIdRef.current = null;
+      }
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((t) => t.stop());
+        videoRef.current.srcObject = null;
+      }
     };
-  }, [startCameraStream, stopCameraStream]);
+  }, [initializeRealCamera]);
 
-  // Capture frame from video element as lightweight JPEG base64
-  const captureFrameBase64 = (): string | undefined => {
+  // Capture Frame as Base64 JPEG for AI Vision Loop
+  const captureFrameBase64 = useCallback((): string | undefined => {
     const canvas = canvasRef.current || document.createElement("canvas");
     canvas.width = 480;
     canvas.height = 270;
@@ -290,89 +309,94 @@ export const VisionCanvas: React.FC<VisionCanvasProps> = ({
     if (video && (video.readyState >= 2 || video.videoWidth > 0)) {
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL("image/jpeg", 0.40);
+        setLastFrameTimestamp(new Date().toLocaleTimeString());
+        return canvas.toDataURL("image/jpeg", 0.45);
       } catch (e) {
-        console.warn("Video frame draw error:", e);
+        console.warn("Frame capture error:", e);
       }
     }
 
-    // Fallback to synthetic canvas if available
     if (syntheticCanvasRef.current) {
       try {
         ctx.drawImage(syntheticCanvasRef.current, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL("image/jpeg", 0.40);
-      } catch (e) {
-        console.warn("Synthetic frame draw error:", e);
-      }
+        setLastFrameTimestamp(new Date().toLocaleTimeString());
+        return canvas.toDataURL("image/jpeg", 0.45);
+      } catch (e) {}
     }
 
     return undefined;
-  };
+  }, []);
 
-  // Trigger manual scan with live frame captured from camera stream
-  const handleTriggerScan = (prompt?: string) => {
-    const frameBase64 = captureFrameBase64();
-    onAnalyzeFrame(prompt, frameBase64);
-  };
-
-  // Periodic continuous auto-scan handler
+  // Continuous Autonomous Environmental Perception Loop
   useEffect(() => {
-    if (!autoScan || !streamActive) return;
+    if (perceptionState !== "ACTIVE") return;
 
     const interval = setInterval(() => {
-      if (!isAnalyzing) {
-        const frameBase64 = captureFrameBase64();
-        onAnalyzeFrame("Continuous environmental navigation scan", frameBase64);
+      // If AI brain is not busy processing a previous query, run continuous environmental perception
+      if (!isAnalyzingRef.current) {
+        const frame = captureFrameBase64();
+        if (frame) {
+          onAnalyzeFrame("Autonomous environmental hazard and path scan", frame);
+        }
       }
-    }, scanIntervalSeconds * 1000);
+    }, perceptionIntervalSec * 1000);
 
     return () => clearInterval(interval);
-  }, [autoScan, streamActive, isAnalyzing, scanIntervalSeconds, onAnalyzeFrame]);
+  }, [perceptionState, perceptionIntervalSec, captureFrameBase64, onAnalyzeFrame]);
 
   return (
     <div className="bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-2xl overflow-hidden flex flex-col">
-      {/* Hidden elements */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Top Controls Bar */}
-      <div className="p-4 border-b border-slate-800 bg-slate-950/80 backdrop-blur flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+      {/* Top Vision Perception Status Bar */}
+      <div className="p-4 border-b border-slate-800 bg-slate-950/90 backdrop-blur flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div
+            className={`w-8 h-8 rounded-xl flex items-center justify-center border ${
+              hardwareSource === "REAL_WEBCAM"
+                ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
+                : "bg-amber-500/20 text-amber-400 border-amber-500/40"
+            }`}
+          >
             <Eye className="w-4 h-4 animate-pulse" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold tracking-wide text-slate-100 flex items-center gap-2">
-              Sahayak Drishti Vision Feed
+            <h2 className="text-sm font-bold tracking-wide text-slate-100 flex items-center gap-2">
+              Autonomous Vision Subsystem
               <span
                 className={`text-[10px] px-2 py-0.5 rounded-full font-mono uppercase font-bold ${
-                  streamActive
-                    ? streamMode === "hardware"
+                  perceptionState === "ACTIVE"
+                    ? hardwareSource === "REAL_WEBCAM"
                       ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                      : "bg-sky-500/20 text-sky-300 border border-sky-500/40"
-                    : "bg-red-500/20 text-red-300 border border-red-500/40"
+                      : "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                    : "bg-rose-500/20 text-rose-300 border border-rose-500/40"
                 }`}
               >
-                {streamActive
-                  ? streamMode === "hardware"
-                    ? "CAMERA ONLINE"
-                    : "SIMULATED FEED"
-                  : "STREAM OFF"}
+                {perceptionState === "ACTIVE"
+                  ? hardwareSource === "REAL_WEBCAM"
+                    ? "REAL WEBCAM: ACTIVE"
+                    : "TEST BENCH SIMULATION"
+                  : perceptionState}
               </span>
             </h2>
-            <p className="text-xs text-slate-400">Piping live camera feed directly to Gemini 3.6 AI</p>
+            <p className="text-xs text-slate-400">
+              {hardwareSource === "REAL_WEBCAM"
+                ? `Device: ${activeDeviceLabel || "Physical Camera Connected"}`
+                : "Development scene stream running continuous hazard detection loop"}
+            </p>
           </div>
         </div>
 
+        {/* Camera Device Switcher (If multiple cameras detected) */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Camera Selector Dropdown (if multiple video inputs exist) */}
           {videoDevices.length > 1 && (
             <select
               value={selectedDeviceId}
               onChange={(e) => {
                 setSelectedDeviceId(e.target.value);
-                startCameraStream(e.target.value);
+                initializeRealCamera(e.target.value);
               }}
-              className="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none"
+              className="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none"
             >
               {videoDevices.map((dev, idx) => (
                 <option key={dev.deviceId || idx} value={dev.deviceId}>
@@ -382,161 +406,114 @@ export const VisionCanvas: React.FC<VisionCanvasProps> = ({
             </select>
           )}
 
-          {/* Stream Start/Stop Toggle */}
-          <button
-            onClick={streamActive ? stopCameraStream : () => startCameraStream()}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition flex items-center gap-1.5 ${
-              streamActive
-                ? "bg-red-500/10 hover:bg-red-500/20 text-red-300 border-red-500/30"
-                : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-            }`}
-          >
-            <Camera className="w-3.5 h-3.5" />
-            {streamActive ? "Stop Feed" : "Start Camera"}
-          </button>
+          {hardwareSource !== "REAL_WEBCAM" && (
+            <button
+              onClick={() => initializeRealCamera()}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs transition flex items-center gap-1.5 shadow-lg shadow-emerald-900/30 active:scale-95"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>Connect Physical Webcam</span>
+            </button>
+          )}
 
-          {/* Continuous Auto-Scan Toggle */}
-          <button
-            onClick={() => setAutoScan(!autoScan)}
-            disabled={!streamActive}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition flex items-center gap-1.5 disabled:opacity-50 ${
-              autoScan
-                ? "bg-indigo-600 text-white border-indigo-500 animate-pulse"
-                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
-            }`}
-          >
-            <Radio className="w-3.5 h-3.5" />
-            {autoScan ? "Auto-Scan ON" : "Auto-Scan OFF"}
-          </button>
-
-          {/* Manual Scan Button */}
-          <button
-            onClick={() => handleTriggerScan()}
-            disabled={isAnalyzing || !streamActive}
-            className="px-3.5 py-1.5 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/30 transition flex items-center gap-1.5 disabled:opacity-50"
-          >
-            {isAnalyzing ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="w-3.5 h-3.5 text-emerald-200" />
-            )}
-            {isAnalyzing ? "Analyzing..." : "Scan & Brief"}
-          </button>
+          <div className="bg-slate-950 border border-slate-800 px-2.5 py-1 rounded-lg text-[11px] font-mono text-slate-400 flex items-center gap-2">
+            <Activity className="w-3 h-3 text-emerald-400 animate-pulse" />
+            <span>Loop: {perceptionIntervalSec}s</span>
+          </div>
         </div>
       </div>
 
-      {/* Main Stream Viewport */}
+      {/* Main Video Perception Viewport */}
       <div className="relative aspect-[16/9] w-full bg-black overflow-hidden select-none flex items-center justify-center">
-        {/* Stream Error Notice */}
-        {streamError && (
-          <div className="absolute inset-0 bg-slate-950/95 p-6 flex flex-col items-center justify-center text-center gap-3 z-30">
+        {/* Permission Request Banner if blocked by browser security */}
+        {perceptionState === "WAITING_PERMISSION" && (
+          <div className="absolute inset-0 bg-slate-950/90 p-6 flex flex-col items-center justify-center text-center gap-3 z-30">
             <AlertCircle className="w-10 h-10 text-amber-400" />
             <div>
-              <h3 className="text-base font-bold text-slate-100">Camera Access Notice</h3>
-              <p className="text-xs text-slate-400 max-w-md mt-1">{streamError}</p>
+              <h3 className="text-base font-bold text-slate-100">Camera Permission Required</h3>
+              <p className="text-xs text-slate-400 max-w-md mt-1">
+                Browser security policy requires a user click to authorize access to your physical webcam.
+              </p>
             </div>
-            <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
-              <button
-                onClick={() => startCameraStream()}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl text-xs transition shadow-lg shadow-emerald-900/30"
-              >
-                Connect Camera & Retry
-              </button>
-              <a
-                href={window.location.href}
-                target="_blank"
-                rel="noreferrer"
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium rounded-xl text-xs transition inline-flex items-center gap-1"
-              >
-                Open in New Tab ↗
-              </a>
-            </div>
+            <button
+              onClick={() => initializeRealCamera()}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition shadow-lg shadow-emerald-900/30 active:scale-95"
+            >
+              Authorize Physical Camera
+            </button>
           </div>
         )}
 
-        {/* Live Video Feed Element */}
+        {/* Live Video Element */}
         <video
           ref={videoRef}
-          className={`w-full h-full object-cover transition-opacity duration-300 ${
-            streamActive ? "opacity-100" : "opacity-0 hidden"
-          }`}
+          className="w-full h-full object-cover"
           playsInline
           muted
           autoPlay
         />
 
-        {/* Placeholder when Stream is inactive */}
-        {!streamActive && !streamError && (
-          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center text-center p-6 gap-3 text-slate-400">
-            <Video className="w-12 h-12 text-slate-600" />
-            <div>
-              <p className="text-sm font-semibold text-slate-300">Live Camera Standby</p>
-              <p className="text-xs text-slate-500">
-                Click 'Start Live Camera' to grant permission and activate stream.
-              </p>
-            </div>
-            <button
-              onClick={() => startCameraStream()}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl text-xs transition shadow-lg shadow-emerald-900/30"
-            >
-              Start Live Camera
-            </button>
-          </div>
-        )}
-
-        {/* 3 Vision Spatial Zones Overlay */}
-        {streamActive && (
-          <div className="absolute inset-0 pointer-events-none flex z-10">
-            {/* Left Zone: 0% - 33% */}
-            <div className="w-[33%] h-full border-r border-dashed border-sky-400/30 bg-sky-950/10 relative p-2">
-              <div className="bg-sky-900/80 text-sky-200 border border-sky-500/40 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur inline-flex items-center gap-1">
-                <span>LEFT ZONE</span>
-                <span className="text-sky-400 font-semibold">(9:00 - 11:00)</span>
-              </div>
-            </div>
-
-            {/* Center Zone: 34% - 66% */}
-            <div className="w-[34%] h-full border-r border-dashed border-emerald-400/40 bg-emerald-950/10 relative p-2 flex justify-center">
-              <div className="bg-emerald-900/80 text-emerald-200 border border-emerald-500/40 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur inline-flex items-center gap-1 h-fit">
-                <span>CENTER ZONE</span>
-                <span className="text-emerald-300 font-semibold">(12:00)</span>
-              </div>
-            </div>
-
-            {/* Right Zone: 67% - 100% */}
-            <div className="w-[33%] h-full bg-purple-950/10 relative p-2 flex justify-end">
-              <div className="bg-purple-900/80 text-purple-200 border border-purple-500/40 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur inline-flex items-center gap-1 h-fit">
-                <span>RIGHT ZONE</span>
-                <span className="text-purple-300 font-semibold">(1:00 - 3:00)</span>
-              </div>
+        {/* 3 Spatial Zones HUD Overlay */}
+        <div className="absolute inset-0 pointer-events-none flex z-10">
+          {/* Left Zone: 0% - 33% */}
+          <div className="w-[33%] h-full border-r border-dashed border-sky-400/30 bg-sky-950/10 p-2 relative">
+            <div className="bg-slate-950/80 text-sky-300 border border-sky-500/40 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur inline-flex items-center gap-1">
+              <span>LEFT ZONE</span>
+              <span className="text-sky-400 font-semibold">(9:00 - 11:00)</span>
             </div>
           </div>
-        )}
 
-        {/* Active Scan Animation Indicator */}
+          {/* Center Zone: 34% - 66% */}
+          <div className="w-[34%] h-full border-r border-dashed border-emerald-400/40 bg-emerald-950/10 p-2 flex justify-center">
+            <div className="bg-slate-950/80 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur inline-flex items-center gap-1 h-fit">
+              <span>CENTER ZONE</span>
+              <span className="text-emerald-400 font-semibold">(12:00 Direct Ahead)</span>
+            </div>
+          </div>
+
+          {/* Right Zone: 67% - 100% */}
+          <div className="w-[33%] h-full bg-purple-950/10 p-2 flex justify-end">
+            <div className="bg-slate-950/80 text-purple-300 border border-purple-500/40 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur inline-flex items-center gap-1 h-fit">
+              <span>RIGHT ZONE</span>
+              <span className="text-purple-400 font-semibold">(1:00 - 3:00)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Continuous Perception Scan Pulse Effect */}
         {isAnalyzing && (
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-emerald-500/25 to-transparent h-20 w-full animate-pulse z-20 pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-emerald-500/20 to-transparent h-24 w-full animate-pulse z-20 pointer-events-none" />
         )}
       </div>
 
-      {/* Footer Info */}
+      {/* Footer Diagnostic Telemetry Bar */}
       <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 flex-wrap gap-2">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          Camera stream piped directly to Gemini 3.6 Flash AI
-        </span>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <span>Auto-Scan Rate:</span>
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5 font-mono text-[11px]">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                hardwareSource === "REAL_WEBCAM" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
+              }`}
+            />
+            {hardwareSource === "REAL_WEBCAM"
+              ? "Continuous Live Camera Stream -> Gemini AI Brain"
+              : "Continuous Simulation Stream -> Gemini AI Brain"}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 text-[11px] font-mono text-slate-400">
+          <span>FPS: {fps > 0 ? fps : 30}</span>
+          <span>Last Processed: {lastFrameTimestamp || "Streaming"}</span>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <span>Perception Loop:</span>
             <select
-              value={scanIntervalSeconds}
-              onChange={(e) => setScanIntervalSeconds(Number(e.target.value))}
-              className="bg-slate-900 border border-slate-800 rounded px-2 py-0.5 text-slate-200 focus:outline-none"
+              value={perceptionIntervalSec}
+              onChange={(e) => setPerceptionIntervalSec(Number(e.target.value))}
+              className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-slate-200 focus:outline-none"
             >
-              <option value={3}>3s</option>
-              <option value={5}>5s</option>
-              <option value={8}>8s</option>
-              <option value={10}>10s</option>
+              <option value={1.5}>1.5s</option>
+              <option value={2.5}>2.5s</option>
+              <option value={4.0}>4.0s</option>
             </select>
           </label>
         </div>
@@ -544,5 +521,3 @@ export const VisionCanvas: React.FC<VisionCanvasProps> = ({
     </div>
   );
 };
-
-

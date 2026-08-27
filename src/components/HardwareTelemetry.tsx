@@ -1,6 +1,6 @@
 import React from "react";
 import { SensorTelemetry, VoiceSettings } from "../types";
-import { Cpu, Compass, Activity, Navigation, AlertOctagon, RefreshCw, Radio, Sliders, ShieldAlert, Footprints } from "lucide-react";
+import { Cpu, Compass, Activity, Navigation, AlertOctagon, RefreshCw, Radio, Sliders, ShieldAlert, Footprints, Layers } from "lucide-react";
 
 interface HardwareTelemetryProps {
   telemetry: SensorTelemetry;
@@ -31,14 +31,14 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
           </div>
           <div>
             <h3 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
-              Arduino Smart Cane Sensors
+              Sensor Bus & Telemetry Stream
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             </h3>
-            <p className="text-xs text-slate-400">Ultrasonic • MPU6050 IMU • GPS Module Telemetry</p>
+            <p className="text-xs text-slate-400">Ultrasonic HC-SR04 • MPU6050 Accelerometer • GPS Module</p>
           </div>
         </div>
 
-        {/* Online / Offline Dual Mode Toggle */}
+        {/* AI Engine Selection */}
         <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
           <button
             onClick={() => onUpdateVoiceSettings({ onlineMode: true })}
@@ -49,7 +49,7 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
             }`}
           >
             <Radio className="w-3.5 h-3.5" />
-            Online (Gemini)
+            Online (Gemini AI Brain)
           </button>
           <button
             onClick={() => onUpdateVoiceSettings({ onlineMode: false })}
@@ -60,7 +60,7 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            Offline (YOLO Edge)
+            Offline (Edge Safety Guard)
           </button>
         </div>
       </div>
@@ -71,16 +71,16 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
         <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col gap-2">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="font-semibold text-slate-200 flex items-center gap-1">
-              <Activity className="w-4 h-4 text-emerald-400" /> Ultrasonic Sensor
+              <Activity className="w-4 h-4 text-emerald-400" /> Ultrasonic HC-SR04
             </span>
             <span
               className={`font-mono text-[11px] font-bold px-2 py-0.5 rounded ${
-                telemetry.ultrasonicCm <= 50
-                  ? "bg-red-500/20 text-red-300 border border-red-500/40"
+                telemetry.ultrasonicCm <= 60
+                  ? "bg-red-500/20 text-red-300 border border-red-500/40 animate-pulse"
                   : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
               }`}
             >
-              {telemetry.ultrasonicCm <= 50 ? "HAZARD (<50cm)" : "NORMAL"}
+              {telemetry.ultrasonicCm <= 60 ? "HAZARD (<60cm)" : "NORMAL"}
             </span>
           </div>
 
@@ -101,9 +101,9 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
             className="accent-emerald-500 mt-1 cursor-pointer"
           />
           <div className="flex justify-between text-[10px] font-mono text-slate-500">
-            <span>10cm (Hazard)</span>
-            <span>100cm</span>
-            <span>200cm</span>
+            <span>10cm (Stop)</span>
+            <span>60cm (Hazard)</span>
+            <span>200cm (Clear)</span>
           </div>
         </div>
 
@@ -111,7 +111,7 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
         <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col gap-2">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="font-semibold text-slate-200 flex items-center gap-1">
-              <Footprints className="w-4 h-4 text-sky-400" /> Gait Steps & MPU6050
+              <Footprints className="w-4 h-4 text-sky-400" /> MPU6050 Gait Accelerometer
             </span>
             <span className="font-mono text-[11px] text-sky-300">
               SL: {(voiceSettings.stepLengthMeters * 100).toFixed(0)}cm
@@ -127,8 +127,8 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
             <span className="text-[11px] text-slate-400 shrink-0">Calibrate SL:</span>
             <input
               type="range"
-              min="0.50"
-              max="0.90"
+              min="0.40"
+              max="0.95"
               step="0.05"
               value={voiceSettings.stepLengthMeters}
               onChange={(e) => onUpdateVoiceSettings({ stepLengthMeters: parseFloat(e.target.value) })}
@@ -154,51 +154,52 @@ export const HardwareTelemetry: React.FC<HardwareTelemetryProps> = ({
         </div>
       </div>
 
-      {/* Smart Cane Physical Buttons Controller */}
+      {/* Cane Physical Handle Emergency Controls */}
       <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col gap-3">
         <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-          <Sliders className="w-3.5 h-3.5 text-emerald-400" /> Smart Cane Physical Hardware Buttons
+          <Sliders className="w-3.5 h-3.5 text-emerald-400" /> Smart Cane Physical Handle Controls
         </h4>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Hardware Button 1: Fall / Impact Simulation */}
-          <button
-            onClick={onTriggerFallProtocol}
-            className="p-3 bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-200 rounded-xl transition flex flex-col items-center justify-center gap-1 text-center font-medium active:scale-95 shadow"
-          >
-            <ShieldAlert className="w-5 h-5 text-red-400" />
-            <span className="text-xs font-bold">Simulate Fall</span>
-            <span className="text-[10px] text-red-300/80">Trigger MPU Impact</span>
-          </button>
-
-          {/* Hardware Button 2: Orientation Recovery Button */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Button 1: Orientation Recovery */}
           <button
             onClick={onTriggerOrientationRecovery}
-            className="p-3 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-200 rounded-xl transition flex flex-col items-center justify-center gap-1 text-center font-medium active:scale-95 shadow"
+            className="p-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-left transition flex items-center gap-3 active:scale-95 group"
           >
-            <Navigation className="w-5 h-5 text-purple-400" />
-            <span className="text-xs font-bold">Orientation Tap</span>
-            <span className="text-[10px] text-purple-300/80">Reassure Facing</span>
+            <div className="p-2 rounded-lg bg-sky-500/20 text-sky-400 group-hover:bg-sky-500/30">
+              <Navigation className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-slate-200">Orientation Tap</div>
+              <div className="text-[10px] text-slate-400">Tactile Compass Heading</div>
+            </div>
           </button>
 
-          {/* Hardware Button 3: Ambient Briefing Tap */}
+          {/* Button 2: Ambient Scene Briefing */}
           <button
             onClick={onTriggerBriefing}
-            className="p-3 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 rounded-xl transition flex flex-col items-center justify-center gap-1 text-center font-medium active:scale-95 shadow"
+            className="p-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-left transition flex items-center gap-3 active:scale-95 group"
           >
-            <Radio className="w-5 h-5 text-indigo-400" />
-            <span className="text-xs font-bold">Briefing Tap</span>
-            <span className="text-[10px] text-indigo-300/80">[CHIME] Ambient Scan</span>
+            <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500/30">
+              <RefreshCw className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-slate-200">Scene Briefing</div>
+              <div className="text-[10px] text-slate-400">Verbal Room Overview</div>
+            </div>
           </button>
 
-          {/* Hardware Button 4: Emergency SOS Instant Button */}
+          {/* Button 3: Fall Impact & SOS Trigger */}
           <button
             onClick={onTriggerFallProtocol}
-            className="p-3 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/40 text-amber-200 rounded-xl transition flex flex-col items-center justify-center gap-1 text-center font-medium active:scale-95 shadow"
+            className="p-3 bg-red-950/40 hover:bg-red-950/60 border border-red-800/60 rounded-xl text-left transition flex items-center gap-3 active:scale-95 group"
           >
-            <AlertOctagon className="w-5 h-5 text-amber-400" />
-            <span className="text-xs font-bold">Cane SOS Key</span>
-            <span className="text-[10px] text-amber-300/80">Instant SOS SMS</span>
+            <div className="p-2 rounded-lg bg-red-500/20 text-red-400 group-hover:bg-red-500/30">
+              <AlertOctagon className="w-4 h-4 text-red-400" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-red-200">Simulate Fall Impact</div>
+              <div className="text-[10px] text-red-400/80">30s SOS Countdown</div>
+            </div>
           </button>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   CommunicationTier,
   EmergencyContact,
@@ -6,6 +6,12 @@ import {
   VoiceSettings,
   AlertLog,
 } from "./types";
+import { StepIntervalData, UserIntentType } from "./core/types";
+import { stepCalculator } from "./navigation/step_length_calculator";
+import { mpuProcessor } from "./sensors/mpu6050_processor";
+import { smartCaneBrain } from "./core/smartcane_orchestrator";
+import { startupDiagnostics, SystemDiagnosticsReport } from "./core/diagnostics";
+import { StartupDiagnosticsPanel } from "./components/StartupDiagnosticsPanel";
 import { VisionCanvas } from "./components/VisionCanvas";
 import { AudioSpeechBanner } from "./components/AudioSpeechBanner";
 import { HardwareTelemetry } from "./components/HardwareTelemetry";
@@ -15,22 +21,41 @@ import { EmergencyContactManager } from "./components/EmergencyContactManager";
 import { RulesReferenceDrawer } from "./components/RulesReferenceDrawer";
 import { LiveVoiceConversation } from "./components/LiveVoiceConversation";
 import { GroundedInformationPanel } from "./components/GroundedInformationPanel";
-import { processOfflineEdgeAlert, calculateSteps } from "./utils/yoloEdgeDetector";
-import { Eye, Radio, Volume2, AlertOctagon, Sparkles, MapPin, Globe } from "lucide-react";
+import { StepLengthVisualizer } from "./components/StepLengthVisualizer";
+import { RoboticBrainPipeline } from "./components/RoboticBrainPipeline";
+import { RaspberryPiDeploymentModal } from "./components/RaspberryPiDeploymentModal";
+import { Eye, Radio, Volume2, AlertOctagon, Sparkles, Cpu, Footprints } from "lucide-react";
 
 export default function App() {
-  // 1. Settings state
+  // 1. Diagnostics & Mode State
+  const [currentMode, setCurrentMode] = useState<"DEVELOPMENT" | "RASPBERRY_PI">("DEVELOPMENT");
+  const [diagReport, setDiagReport] = useState<SystemDiagnosticsReport>(() => startupDiagnostics.getReport());
+  const [isInitializingDiag, setIsInitializingDiag] = useState<boolean>(true);
+  const [cameraStatus, setCameraStatus] = useState<string>("INITIALIZING");
+  const hasSpokenReadyRef = useRef<boolean>(false);
+
+  // 2. Settings state
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
-    stepLengthMeters: 0.75,
-    voicePitch: 0.85, // Low-pitched grounded male tone
+    stepLengthMeters: 0.65,
+    voicePitch: 0.85, // Low-pitched grounded tone
     voiceRate: 0.95,
     enableHaptics: true,
     volume: 1.0,
     preferredVoiceName: "Male Grounded",
-    onlineMode: true, // true = Gemini 2.5 Flash, false = Edge YOLO
+    onlineMode: true,
   });
 
-  // 2. Hardware telemetry state
+  // 3. Hardware telemetry & MPU6050 Gait state
+  const [stepInterval, setStepInterval] = useState<StepIntervalData>(() =>
+    stepCalculator.calculateStepLength(11.2, 8.6)
+  );
+
+  const [currentIntent, setCurrentIntent] = useState<UserIntentType | null>(null);
+  const [lastUserQuery, setLastUserQuery] = useState<string>("");
+  const [isListeningSpeech, setIsListeningSpeech] = useState<boolean>(true);
+  const [isSpeakingSpeech, setIsSpeakingSpeech] = useState<boolean>(false);
+  const [isPiModalOpen, setIsPiModalOpen] = useState<boolean>(false);
+
   const [telemetry, setTelemetry] = useState<SensorTelemetry>({
     ultrasonicCm: 150,
     stepCount: 428,
@@ -43,15 +68,64 @@ export default function App() {
     address: "Connaught Place, Central Concourse & Cafe Lobby",
   });
 
-  // 3. Speech output & alerts
+  // 4. Speech output & alerts
   const [currentSpeechText, setCurrentSpeechText] = useState<string>(
-    "[CHIME] Sahayak Drishti active. Live camera stream connected."
+    "[CHIME] SmartCane is initializing all robotic subsystems..."
   );
-  const [tier, setTier] = useState<CommunicationTier>("Tier 2");
-  const [source, setSource] = useState<string>("Gemini 2.5 Flash");
+  const [tier, setTier] = useState<CommunicationTier>("Tier 3");
+  const [source, setSource] = useState<string>("System Boot Diagnostics");
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
-  // 4. Fall & Emergency SOS state
+  // Run full startup diagnostics
+  const runDiagnostics = useCallback(async (mode: "DEVELOPMENT" | "RASPBERRY_PI" = currentMode) => {
+    setIsInitializingDiag(true);
+    const report = await startupDiagnostics.runFullDiagnostics(mode);
+    setDiagReport(report);
+    setIsInitializingDiag(false);
+
+    if (!hasSpokenReadyRef.current) {
+      hasSpokenReadyRef.current = true;
+      setTimeout(() => {
+        triggerSpeechOutput(
+          "[CHIME] SmartCane is ready. Step length is calibrated at 0.65 meters. I am listening.",
+          "Tier 3",
+          "Startup Diagnostics"
+        );
+      }, 900);
+    }
+  }, [currentMode]);
+
+  useEffect(() => {
+    runDiagnostics(currentMode);
+  }, [runDiagnostics, currentMode]);
+
+  // Register orchestrator speech handler
+  useEffect(() => {
+    smartCaneBrain.registerSpeechHandler((text, spokenTier) => {
+      triggerSpeechOutput(text, spokenTier, "SmartCane AI Brain");
+    });
+  }, []);
+
+  // Periodic MPU6050 gait simulation in development mode
+  useEffect(() => {
+    let phase = 0;
+    const interval = setInterval(() => {
+      phase += 0.2;
+      const sample = mpuProcessor.generateSimulatedGaitSample(phase);
+      const res = mpuProcessor.pushSample(sample.ax, sample.ay, sample.az);
+      if (res.stepInterval) {
+        setStepInterval(res.stepInterval);
+        setVoiceSettings((prev) => ({
+          ...prev,
+          stepLengthMeters: res.stepInterval.stepLengthMeters,
+        }));
+      }
+    }, 450);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // 5. Fall & Emergency SOS state
   const [isFallModalOpen, setIsFallModalOpen] = useState<boolean>(false);
   const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([
     {
@@ -70,14 +144,14 @@ export default function App() {
     },
   ]);
 
-  // 5. Alert Log History
+  // 6. Alert Log History
   const [alertLogs, setAlertLogs] = useState<AlertLog[]>([
     {
       id: "log-1",
       timestamp: new Date().toLocaleTimeString(),
-      text: "[CHIME] Sahayak Drishti initialized with live camera & voice guidance.",
+      text: "[CHIME] SmartCane robotic assistant initialized with MPU6050 gait calculation.",
       tier: "Tier 3",
-      source: "Gemini 2.5 Flash",
+      source: "Startup Diagnostics",
       chime: true,
     },
   ]);
@@ -89,10 +163,17 @@ export default function App() {
   const updateTelemetry = (updates: Partial<SensorTelemetry>) => {
     setTelemetry((prev) => {
       const next = { ...prev, ...updates };
-      // Check for immediate ultrasonic hazard (< 50cm)
-      if (next.ultrasonicCm > 0 && next.ultrasonicCm <= 50) {
-        const steps = calculateSteps(next.ultrasonicCm / 100, voiceSettings.stepLengthMeters);
-        triggerSpeechOutput(`Stop! Immediate obstacle ${steps} step ahead.`, "Tier 1", "Ultrasonic Hardware");
+      // Check for immediate ultrasonic hazard (< 60cm)
+      if (next.ultrasonicCm > 0 && next.ultrasonicCm <= 60) {
+        const steps = stepCalculator.convertDistanceToSteps(
+          next.ultrasonicCm / 100,
+          stepInterval.stepLengthMeters
+        );
+        triggerSpeechOutput(
+          `Stop! Immediate obstacle ${steps} step ahead.`,
+          "Tier 1",
+          "Ultrasonic Sensor"
+        );
       }
       return next;
     });
@@ -116,55 +197,60 @@ export default function App() {
     setTier(outputTier);
     setSource(outputSource);
     addAlertLog(text, outputTier, outputSource);
+    setIsSpeakingSpeech(true);
+    setTimeout(() => setIsSpeakingSpeech(false), 3200);
   };
 
-  // Process Vision Frame with Gemini Online or Edge Offline
+  // Process Vision Frame & Voice Command through Orchestrator
   const handleAnalyzeFrame = async (customUserQuery?: string, imageBase64?: string) => {
     setIsAnalyzing(true);
+    const query = customUserQuery || "Autonomous environmental hazard and path scan";
+    setLastUserQuery(query);
 
-    if (!voiceSettings.onlineMode) {
-      // Offline Edge YOLO Fallback
-      setTimeout(() => {
-        const result = processOfflineEdgeAlert(
-          [],
-          telemetry.ultrasonicCm,
-          voiceSettings.stepLengthMeters
-        );
-        triggerSpeechOutput(result.text, result.tier, "Edge YOLO Fallback");
-        setIsAnalyzing(false);
-      }, 400);
-      return;
-    }
+    const intent = smartCaneBrain.classifyIntent(query);
+    setCurrentIntent(intent);
 
-    // Online Gemini 2.5 Flash API Route
     try {
-      const response = await fetch("/api/analyze-vision", {
+      const response = await fetch("/api/orchestrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userQuery: customUserQuery || "Analyze path and obstacles ahead for safe walking",
-          sensorData: telemetry,
-          stepLength: voiceSettings.stepLengthMeters,
-          environmentContext: "Live MediaDevices Camera Feed",
+          query,
           imageBase64: imageBase64 || undefined,
+          aMax: stepInterval.aMax,
+          aMin: stepInterval.aMin,
+          calibrationK: stepInterval.calibrationK,
+          ultrasonicCm: telemetry.ultrasonicCm,
+          location: telemetry.gpsCoords,
         }),
       });
 
-      const data = await response.json();
-      if (data.response) {
-        triggerSpeechOutput(data.response, data.tier || "Tier 2", data.source || "Gemini 2.5 Flash");
-      } else {
-        triggerSpeechOutput("Path is clear. Continue straight.", "Tier 2", "Gemini 2.5 Flash");
+      if (response.ok) {
+        const data = await response.json();
+        if (data.spokenText) {
+          // Avoid repetitive non-critical chatter during silent ambient scanning
+          const isSilentScan = query.includes("Autonomous environmental");
+          const isClear = data.spokenText.toLowerCase().includes("clear");
+          if (!isSilentScan || !isClear) {
+            triggerSpeechOutput(data.spokenText, data.tier || "Tier 2", "SmartCane AI Brain");
+          }
+          if (data.stepLengthMeters) {
+            setStepInterval((prev) => ({
+              ...prev,
+              stepLengthMeters: data.stepLengthMeters,
+            }));
+          }
+          return;
+        }
       }
+
+      // Fallback local orchestrator pipeline
+      const instruction = await smartCaneBrain.handleUserSpeechCommand(query, telemetry.gpsCoords);
+      triggerSpeechOutput(instruction.spokenText, instruction.tier, "SmartCane Local Brain");
     } catch (err) {
-      console.error("Vision Analysis Error:", err);
-      // Edge rule fallback on network drop
-      const result = processOfflineEdgeAlert(
-        [],
-        telemetry.ultrasonicCm,
-        voiceSettings.stepLengthMeters
-      );
-      triggerSpeechOutput(result.text, result.tier, "Edge YOLO Fallback");
+      console.error("Orchestrator Error:", err);
+      const instruction = await smartCaneBrain.handleUserSpeechCommand(query, telemetry.gpsCoords);
+      triggerSpeechOutput(instruction.spokenText, instruction.tier, "SmartCane Offline Brain");
     } finally {
       setIsAnalyzing(false);
     }
@@ -172,8 +258,8 @@ export default function App() {
 
   // Orientation Recovery Button Tap
   const handleOrientationRecovery = () => {
-    const text = `You are facing North toward the main concourse road.`;
-    triggerSpeechOutput(text, "Tier 2", "Orientation Tap");
+    const text = `You are facing North toward the main concourse.`;
+    triggerSpeechOutput(text, "Tier 2", "Orientation Sensor");
   };
 
   // Ambient Briefing Button Tap
@@ -183,6 +269,7 @@ export default function App() {
 
   // Voice Query Submission
   const handleVoiceCommand = (query: string) => {
+    setLastUserQuery(query);
     if (
       query.toLowerCase().includes("cancel") ||
       query.toLowerCase().includes("okay") ||
@@ -190,10 +277,31 @@ export default function App() {
       query.toLowerCase().includes("stop sos")
     ) {
       setIsFallModalOpen(false);
-      triggerSpeechOutput("SOS canceled. System resuming normal navigation.", "Tier 2", "Voice Command");
+      triggerSpeechOutput("SOS canceled. Resuming normal navigation.", "Tier 2", "Voice Command");
       return;
     }
     handleAnalyzeFrame(query);
+  };
+
+  const handleKChange = (newK: number) => {
+    const updated = stepCalculator.calculateStepLength(stepInterval.aMax, stepInterval.aMin);
+    setStepInterval(updated);
+    setVoiceSettings((prev) => ({
+      ...prev,
+      stepLengthMeters: updated.stepLengthMeters,
+    }));
+  };
+
+  const handleAuthorizePermissions = async () => {
+    try {
+      if (navigator.mediaDevices?.getUserMedia) {
+        await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        runDiagnostics();
+      }
+    } catch (e) {
+      console.warn("User authorization completed or cancelled:", e);
+      runDiagnostics();
+    }
   };
 
   return (
@@ -206,27 +314,31 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-base font-extrabold tracking-tight text-white flex items-center gap-2">
-              SAHAYAK DRISHTI
+              SMARTCANE ROBOTIC BRAIN
               <span className="text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full uppercase">
-                Smart Cane Assistant
+                {currentMode === "DEVELOPMENT" ? "DEV SUITE" : "PI DEPLOYMENT"}
               </span>
             </h1>
-            <p className="text-xs text-slate-400">AI Spatial Mobility, Vision & Safety Companion</p>
+            <p className="text-xs text-slate-400">Speech-Controlled, Vision & Sensor Assistive AI Assistant</p>
           </div>
         </div>
 
-        {/* System Hardware Status Badges */}
-        <div className="hidden sm:flex items-center gap-3 text-xs">
-          <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl flex items-center gap-2">
-            <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-            <span className="text-slate-300">
-              Mode: <strong className="text-emerald-300">{voiceSettings.onlineMode ? "Gemini 2.5 Flash" : "YOLO Edge"}</strong>
-            </span>
-          </div>
+        {/* System Hardware & Deployment Badges */}
+        <div className="flex items-center gap-3 text-xs">
+          {/* Raspberry Pi Deployment Guide Button */}
+          <button
+            onClick={() => setIsPiModalOpen(true)}
+            className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 rounded-xl font-medium transition flex items-center gap-1.5 active:scale-95 shadow"
+          >
+            <Cpu className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden sm:inline">Raspberry Pi Service</span>
+            <span className="sm:hidden">Pi Code</span>
+          </button>
 
-          <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl flex items-center gap-2 font-mono">
-            <span className="text-slate-400">Step Length:</span>
-            <strong className="text-sky-300">{(voiceSettings.stepLengthMeters * 100).toFixed(0)}cm</strong>
+          <div className="hidden md:flex bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl items-center gap-2 font-mono">
+            <Footprints className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-slate-400">SL:</span>
+            <strong className="text-amber-300">{stepInterval.stepLengthMeters.toFixed(2)}m</strong>
           </div>
 
           <button
@@ -241,7 +353,34 @@ export default function App() {
 
       {/* Main Container Layout */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 flex flex-col gap-6">
-        {/* Section 1: Vision Camera Feed & Audio Persona Output */}
+        {/* Section 0: Real Startup Diagnostics Subsystem Panel */}
+        <StartupDiagnosticsPanel
+          report={diagReport}
+          currentMode={currentMode}
+          onModeChange={(m) => setCurrentMode(m)}
+          onRerunDiagnostics={() => runDiagnostics(currentMode)}
+          onRequestPermissions={handleAuthorizePermissions}
+          isInitializing={isInitializingDiag}
+        />
+
+        {/* Section 1: Autonomous Brain Pipeline Visualizer */}
+        <RoboticBrainPipeline
+          currentIntent={currentIntent}
+          lastUserQuery={lastUserQuery}
+          lastSpokenText={currentSpeechText}
+          currentTier={tier}
+          stepInterval={stepInterval}
+          isListening={isListeningSpeech}
+          isSpeaking={isSpeakingSpeech}
+        />
+
+        {/* Section 2: Step-Length MPU6050 Formula & Calibration Engine */}
+        <StepLengthVisualizer
+          currentStepInterval={stepInterval}
+          onKChange={handleKChange}
+        />
+
+        {/* Section 3: Vision Camera Feed & Continuous Audio Speech Controls */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Spatial Vision Canvas (7 Cols) */}
           <div className="lg:col-span-7 flex flex-col gap-4">
@@ -249,10 +388,11 @@ export default function App() {
               voiceSettings={voiceSettings}
               onAnalyzeFrame={handleAnalyzeFrame}
               isAnalyzing={isAnalyzing}
+              onCameraStatusChange={(st) => setCameraStatus(st)}
             />
           </div>
 
-          {/* Right Column: Audio Speech Banner & Persona Controls (5 Cols) */}
+          {/* Right Column: Audio Speech Banner & Always-Active Speech Ear (5 Cols) */}
           <div className="lg:col-span-5 flex flex-col gap-4">
             <AudioSpeechBanner
               currentSpeechText={currentSpeechText}
@@ -262,15 +402,17 @@ export default function App() {
               onUpdateSettings={updateVoiceSettings}
             />
 
-            {/* Live Voice Query Push to Talk Input */}
+            {/* Continuous Speech Intake (Hands-Free Ear) */}
             <VoiceCommandInput
               onSendCommand={handleVoiceCommand}
               isProcessing={isAnalyzing}
+              isSpeaking={isSpeakingSpeech}
+              onListeningStateChange={(l) => setIsListeningSpeech(l)}
             />
           </div>
         </div>
 
-        {/* Section 1.5: Real-time Live API Voice & Google Search / Maps Grounding */}
+        {/* Section 4: Real-time Live API Voice & Google Search / Maps Grounding */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <LiveVoiceConversation />
           <GroundedInformationPanel
@@ -278,7 +420,7 @@ export default function App() {
           />
         </div>
 
-        {/* Section 2: Arduino Hardware Telemetry & Sensor Controls */}
+        {/* Section 5: Sensor Bus & Telemetry Controls */}
         <HardwareTelemetry
           telemetry={telemetry}
           onUpdateTelemetry={updateTelemetry}
@@ -289,7 +431,7 @@ export default function App() {
           onTriggerBriefing={handleBriefingTap}
         />
 
-        {/* Section 3: Emergency Contacts & System Rules Reference */}
+        {/* Section 6: Emergency Contacts & System Rules Reference */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <EmergencyContactManager
             contacts={emergencyContacts}
@@ -300,7 +442,7 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <h3 className="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> Sahayak Speech Alert Log
+                <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> SmartCane Speech Alert Log
               </h3>
               <span className="text-[10px] text-slate-400 font-mono">Recent 20 Messages</span>
             </div>
@@ -335,7 +477,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Section 4: Rules Reference Sheet */}
+        {/* Section 7: Rules Reference Sheet */}
         <RulesReferenceDrawer />
       </main>
 
@@ -345,6 +487,12 @@ export default function App() {
         onCancel={() => setIsFallModalOpen(false)}
         telemetry={telemetry}
         emergencyContacts={emergencyContacts}
+      />
+
+      {/* Raspberry Pi Deployment Modal */}
+      <RaspberryPiDeploymentModal
+        isOpen={isPiModalOpen}
+        onClose={() => setIsPiModalOpen(false)}
       />
     </div>
   );
