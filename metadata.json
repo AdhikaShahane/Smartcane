@@ -1,0 +1,6 @@
+{
+  "name": "Sahayak Drishti",
+  "description": "AI-powered mobility, spatial awareness, and safety companion embedded in a smart cane for visually impaired individuals.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
