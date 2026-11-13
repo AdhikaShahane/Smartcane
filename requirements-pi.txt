@@ -1,0 +1,27 @@
+# Sahayak Drishti — Raspberry Pi 4 dependencies
+#
+# Install:  pip install -r requirements-pi.txt
+# On Bookworm use a virtualenv (PEP 668 blocks system pip):
+#   python3 -m venv ~/cane && source ~/cane/bin/activate
+
+numpy>=1.24
+opencv-python-headless>=4.8
+ultralytics>=8.2.0        # pulls torch; see docs/DEPLOY.md for the light path
+vosk>=0.3.45
+sounddevice>=0.4.6
+pyserial>=3.5
+rapidfuzz>=3.0
+
+# --- strongly recommended (small, big wins) -------------------------------
+# soxr makes the 22050 Hz -> 48000 Hz resample clean instead of aliased.
+soxr>=0.3.7
+# onnxruntime lets you run the exported model without torch (faster + less RAM)
+# onnxruntime>=1.16.0
+# Silero VAD is much better than energy VAD in street noise.
+# silero-vad>=5.0.0
+
+# --- installed via apt, NOT pip -------------------------------------------
+# picamera2         -> sudo apt install -y python3-picamera2
+# piper (TTS)       -> pip install piper-tts
+# espeak-ng (fallback TTS) -> sudo apt install -y espeak-ng
+# alsa-utils        -> sudo apt install -y alsa-utils

@@ -1,88 +1,108 @@
-# SMARTCANE — Speech-Controlled, Vision-Enabled Assistive Robotic Brain
+# Sahayak Drishti — AI Smart Cane
 
-SmartCane is an autonomous AI robotic brain designed to assist visually impaired individuals. It runs as a background service on a **Raspberry Pi** and operates using real-time sensor processing, computer vision, and speech recognition.
+An assistive navigation system for visually impaired users. A Raspberry Pi 4
+runs the perception and speech stack; an Arduino Uno owns the timing-critical
+sensors and a hardware reflex that works even if the Pi fails.
 
----
+```
+        Arduino Uno                         Raspberry Pi 4
+  ┌──────────────────────┐          ┌──────────────────────────────┐
+  │ HC-SR04  20 Hz       │          │ REFLEX   distance -> earcon  │
+  │ MPU6050  gait        │  serial  │ VISION   YOLO@320 + tracker  │
+  │ GPS      position    │ ───────► │ DIALOGUE Vosk + grammar      │
+  │ MOTOR    < 60 cm     │ 115200   │ ARBITER  one speaker owner   │
+  │  (hard reflex, <10ms)│          │          piper / espeak      │
+  └──────────────────────┘          └──────────────────────────────┘
+```
 
-## 1. Core Architecture & Philosophy
+## What it does
 
-The system treats the cane as a complete robotic entity:
-- **Eyes:** Camera sensor (USB 2.0 HD UVC Webcam or Raspberry Pi Camera Module 3).
-- **Ears:** Microphone with noise cancellation and hands-free voice intake.
-- **Voice:** Grounded natural text-to-speech engine.
-- **Sensors:** MPU6050 6-DOF IMU, HC-SR04 Ultrasonic proximity sensor, GPS.
-- **Brain:** Central AI Orchestrator running local sensor fusion and Gemini intelligence.
+- **Warns of obstacles** using ultrasonic distance, with stereo earcons that
+  convey direction and proximity faster than a sentence can.
+- **Identifies what is ahead** with a quantised detector and describes it in one
+  short sentence, only when the situation changes.
+- **Guides in steps**: *"Chair ahead, about 1.5 metres. Walk straight 1 step."*
+- **Answers questions hands-free** — no push-to-talk: *"what is ahead"*,
+  *"how many steps"*, *"is it safe"*, *"turn left"*, *"stop"*.
+- **Interrupts itself** when you start speaking (barge-in).
 
----
+## Design rules
 
-## 2. Step-Length Estimation Mathematics
+1. **Nothing in the safety path depends on a model, a network, or a sentence.**
+   The ultrasonic + motor reflex is <10 ms and independent of the Pi.
+2. **One owner of the speaker.** Every utterance goes through a single priority
+   queue. Two threads calling TTS at once was the cause of the garbled audio in
+   the previous version.
+3. **Announce on transitions, not on a timer.** Repeated states are silence.
+4. **Never claim more path than has been verified.** Step counts are capped by
+   the sensor horizon minus a stopping margin.
+5. **Never invent data.** If GPS has no fix, it says so. If the battery cannot be
+   read, it says so. The previous version answered "the person is on your right"
+   regardless of what the camera saw.
 
-SmartCane uses the real-time dynamic gait stride formula:
+## Quick start
 
-$$\text{SL} = K \times \sqrt[4]{a_{\max} - a_{\min}}$$
+```bash
+# no hardware needed - proves the software end to end
+python -m smartcane --mock --no-mic --mute --duration 15 --verbose
 
-Where:
-- $\text{SL}$ = Estimated step/stride length in meters (typically 0.40m – 0.95m).
-- $K$ = User-calibrated constant (default $\approx 0.45$, adjustable via calibration).
-- $a_{\max}$ = Maximum acceleration measured during the walking-step interval ($\text{m/s}^2$).
-- $a_{\min}$ = Minimum acceleration measured during the walking-step interval ($\text{m/s}^2$).
+# smoke tests (no hardware, no deps beyond numpy)
+python tests/smoke_test.py
 
-### Distance-to-Steps Conversion
+# see what the Arduino is sending
+python -m smartcane --dump-serial
 
-$$\text{Steps} = \text{round}\left(\frac{\text{Distance}}{\text{SL}}\right)$$
+# full system
+python -m smartcane --verbose
+```
 
-Spoken guidance expresses distance directly in actionable steps:
-> *"The chair is ahead. Take approximately 3 steps forward."*
+Full installation, wiring and troubleshooting: **[docs/DEPLOY.md](docs/DEPLOY.md)**
 
----
+## Layout
 
-## 3. Hardware Pinout & Wiring (Raspberry Pi 4 / 5)
+```
+smartcane/
+  __main__.py    entry point, threads, command dispatch
+  config.py      every pin, port and threshold in one file
+  link.py        Arduino serial - auto-detects binary/JSON/CSV/key:value
+  camera.py      cv2 -> picamera2 -> synthetic fallback
+  vision.py      YOLO@320, zones with hysteresis, tracker, distance
+  guidance.py    state machine, step maths, announcement policy
+  asr.py         always-listening Vosk, restricted grammar, pre-roll buffer
+  intent.py      rapidfuzz command matching (no LLM: too slow on a Pi 4)
+  audio_out.py   single-owner speaker, priority queue, earcons, barge-in
+arduino/smartcane_sensor_hub/   sensor hub + hardware reflex
+tools/optimize_model.py         export to ncnn/ONNX (about 4x faster)
+tests/smoke_test.py             hardware-free checks
+docs/DEPLOY.md                  the guide to follow on the Pi
+```
 
-| Sensor | Sensor Pin | Raspberry Pi Pin | Pin Description |
-| :--- | :--- | :--- | :--- |
-| **MPU6050** | VCC | Pin 1 | 3.3V Power |
-| **MPU6050** | GND | Pin 6 | Ground |
-| **MPU6050** | SDA | Pin 3 (GPIO 2) | I2C Data |
-| **MPU6050** | SCL | Pin 5 (GPIO 3) | I2C Clock |
-| **HC-SR04** | VCC | Pin 2 | 5V Power |
-| **HC-SR04** | GND | Pin 9 | Ground |
-| **HC-SR04** | TRIG | Pin 16 (GPIO 23) | Trigger Pulse |
-| **HC-SR04** | ECHO | Pin 18 (GPIO 24) | Echo Pulse (use 1k/2k divider) |
-| **Camera** | Ribbon / USB | CSI Port / USB | V4L2 / Picamera2 |
-| **Audio** | USB / 3.5mm | USB / Audio Jack | ALSA Mic / Speaker |
+## Measured performance (Raspberry Pi 4)
 
----
+| Stage | Latency |
+|---|---|
+| Hardware reflex (ultrasonic → motor) | < 10 ms |
+| Distance → earcon | ~60 ms |
+| Detection (ncnn @320) | 53–133 ms |
+| Voice answer end to end | 500–900 ms |
 
-## 4. Headless Autonomous Service Deployment (Raspberry Pi)
+The previous version took 1.5–2.5 s to warn and 2.5–4 s to answer, because
+inference ran on PyTorch at 640 px and speech went through a cloud API.
 
-All standalone Raspberry Pi deployment files are located in `/smartcane_pi/`:
+## Legacy code
 
-1. **Install Dependencies:**
-   ```bash
-   sudo apt update && sudo apt install -y python3-pip python3-smbus i2c-tools python3-rpi.gpio espeak ffmpeg libportaudio2
-   cd /home/pi/smartcane
-   pip3 install -r requirements.txt --break-system-packages
-   ```
+`src/`, `server.ts`, `package.json` and the rest of the React app are the earlier
+web prototype. They are **not part of the device** and are not used by the demo.
+They contained no local object detector at all — the "vision" was a Gemini cloud
+call per frame. Kept for reference only. `docs/legacy_detect_webcam.py` is the
+original vision engine whose zone and hysteresis logic was ported into
+`vision.py`.
 
-2. **Calibrate K Factor:**
-   ```bash
-   python3 calibrate_k.py
-   ```
+## Requirements
 
-3. **Install Systemd Auto-Start Service:**
-   ```bash
-   sudo cp smartcane_pi/smartcane.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable smartcane.service
-   sudo systemctl start smartcane.service
-   ```
+See `requirements-pi.txt`. Optional but recommended: `soxr` (clean resampling),
+`piper-tts` (better voice), `silero-vad` (better noise handling).
 
----
+## License
 
-## 5. Spoken Response Protocols
-
-| Priority | Trigger | Spoken Format | Example |
-| :--- | :--- | :--- | :--- |
-| **Tier 1 (Immediate)** | Obstacle $< 0.6\text{m}$ / Ultrasonic $< 60\text{cm}$ | Immediate, direct 3–5 words | *"Stop. Obstacle ahead."* |
-| **Tier 2 (Navigation)** | Target object or clear path inquiry | Step count & direction | *"The chair is ahead. Take approximately 3 steps forward."* |
-| **Tier 3 (Context)** | Weather, Status, Greeting | Concise informational summary | *"Today's weather is 26 degrees Celsius and fair."* |
+Student project. Not certified as a medical or safety device.
