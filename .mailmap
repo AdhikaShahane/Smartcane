@@ -1,0 +1,9 @@
+# Corrections to commit attribution.
+#
+# Two commits (4341feb, a99a931) were authored with the wrong email:
+#   adhika@users.noreply.github.com
+# That address belongs to an unrelated GitHub user ("Adhika Lie"), so GitHub
+# credited those commits to them instead of to this repository's owner.
+#
+# Syntax: <canonical Name> <canonical email> <wrong Name> <wrong email>
+AdhikaShahane <adhikashahane@gmail.com> Adhika Shahane <adhika@users.noreply.github.com>
