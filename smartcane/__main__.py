@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import signal
 import sys
 import time
@@ -267,7 +269,11 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("startup failed: %s", exc)
         return 1
     cane.run()
-    return 0
+    # OpenCV, torch and PortAudio leave C++ objects alive in worker threads.
+    # The normal interpreter teardown can abort with "terminate called without
+    # an active exception" *after* a clean shutdown. Flush logs and leave now.
+    logging.shutdown()
+    os._exit(0)
 
 
 if __name__ == "__main__":

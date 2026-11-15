@@ -66,6 +66,46 @@ def test_intent() -> None:
         check(f"{text!r} stays unknown", cmd is intent.Intent.UNKNOWN, cmd.value)
 
 
+def test_no_false_triggers() -> None:
+    """The safety property of an always-listening cane.
+
+    These assertions must hold identically whether rapidfuzz is installed or the
+    difflib fallback is used. They caught a real bug: `partial_ratio("left",
+    "turn left")` scores 100, so a bare "left" heard in conversation fired a
+    turn command. Never use a substring scorer for command matching.
+    """
+    print("false-trigger guards")
+    directional = (intent.Intent.LEFT, intent.Intent.RIGHT,
+                   intent.Intent.STRAIGHT)
+    for word in ("left", "right", "straight", "forward", "ahead"):
+        cmd, score, _ = intent.classify(word)
+        check(f"bare {word!r} is not a direction command",
+              cmd not in directional, f"{cmd.value} {score:.0f}")
+
+    # ordinary conversation must never become a command
+    for sentence in (
+        "i left my bag at home",
+        "hello there",
+        "can you turn the light on",
+        "she went right past me",
+        "we should stop for coffee later",
+        "the weather was nice yesterday",
+        "okay",
+        "um",
+    ):
+        cmd, score, _ = intent.classify(sentence)
+        check(f"{sentence!r} is not a command",
+              cmd is intent.Intent.UNKNOWN, f"{cmd.value} {score:.0f}")
+
+    # the real commands must still work
+    for text, expected in (("turn left", intent.Intent.LEFT),
+                           ("move right", intent.Intent.RIGHT),
+                           ("go straight", intent.Intent.STRAIGHT),
+                           ("stop", intent.Intent.STOP)):
+        cmd, score, _ = intent.classify(text)
+        check(f"{text!r} still works", cmd is expected, f"{score:.0f}")
+
+
 def test_steps() -> None:
     print("step maths")
     check("Weinberg in human range",
@@ -135,6 +175,7 @@ def main() -> int:
     print(" Sahayak Drishti - smoke tests (no hardware required)")
     print("=" * 60)
     test_intent()
+    test_no_false_triggers()
     test_steps()
     test_state_machine()
     test_earcons()

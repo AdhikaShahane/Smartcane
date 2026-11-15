@@ -15,10 +15,11 @@ from enum import Enum
 from typing import List, Tuple
 
 try:
-    from rapidfuzz import fuzz, process
+    from rapidfuzz import fuzz
     _HAVE_RAPIDFUZZ = True
 except ImportError:                                    # pragma: no cover
     import difflib
+    fuzz = None                                        # type: ignore
     _HAVE_RAPIDFUZZ = False
 
 
@@ -136,8 +137,9 @@ PHRASES: List[Tuple[str, Intent]] = [
     ("stop listening", Intent.CANCEL),
 ]
 
-MATCH_THRESHOLD = 82.0     # partial_ratio required to accept a command
+MATCH_THRESHOLD = 82.0     # similarity required to accept a command
 MIN_CHARS = 3              # ignore fragments shorter than this
+MAX_EXTRA_CHARS = 12       # an utterance longer than phrase+this is a sentence
 
 _PHRASE_LIST = [p for p, _ in PHRASES]
 _INTENT_OF = {p: i for p, i in PHRASES}
@@ -157,29 +159,44 @@ def grammar_phrases() -> List[str]:
     return list(_PHRASE_LIST)
 
 
+def _score(text: str, phrase: str) -> float:
+    """Whole-utterance similarity, word-order insensitive.
+
+    Deliberately NOT `partial_ratio` / `token_set_ratio`. Both score a phrase
+    that is a *subset* of the text at 100, so `partial_ratio("left",
+    "turn left") == 100` -- which makes a bare "left" heard in conversation
+    trigger a turn command. That is the single most dangerous failure mode of
+    an always-listening cane, so substring scorers are banned here.
+    """
+    if _HAVE_RAPIDFUZZ:
+        return float(fuzz.token_sort_ratio(text, phrase))
+    a = " ".join(sorted(text.split()))
+    b = " ".join(sorted(phrase.split()))
+    return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
+
+
 def classify(text: str) -> Tuple[Intent, float, str]:
     """Return (intent, confidence 0-100, matched phrase)."""
     clean = " ".join(text.lower().strip().split())
     if len(clean) < MIN_CHARS:
         return Intent.UNKNOWN, 0.0, ""
 
-    if _HAVE_RAPIDFUZZ:
-        best = process.extractOne(
-            clean, _PHRASE_LIST, scorer=fuzz.partial_ratio,
-            score_cutoff=MATCH_THRESHOLD)
-        if best is None:
-            # second pass: token_set_ratio tolerates extra words
-            best = process.extractOne(
-                clean, _PHRASE_LIST, scorer=fuzz.token_set_ratio,
-                score_cutoff=MATCH_THRESHOLD + 6)
-        if best is None:
-            return Intent.UNKNOWN, 0.0, ""
-        phrase, score = best[0], best[1]
-    else:                                              # pragma: no cover
-        phrase, score = max(
-            ((p, difflib.SequenceMatcher(None, clean, p).ratio() * 100)
-             for p in _PHRASE_LIST), key=lambda kv: kv[1])
-        if score < MATCH_THRESHOLD:
-            return Intent.UNKNOWN, 0.0, ""
+    n_words = len(clean.split())
+    best_phrase, best_score = "", 0.0
 
-    return _INTENT_OF[phrase], float(score), phrase
+    for phrase in _PHRASE_LIST:
+        # GUARD 1: a bare word must never match a multi-word command.
+        # "left" alone is a preposition in conversation; "turn left" is a command.
+        if n_words < len(phrase.split()):
+            continue
+        # GUARD 2: an utterance much longer than the phrase is a different
+        # sentence that merely shares words ("i left my bag at home").
+        if len(clean) > len(phrase) + MAX_EXTRA_CHARS:
+            continue
+        score = _score(clean, phrase)
+        if score > best_score:
+            best_phrase, best_score = phrase, score
+
+    if best_score < MATCH_THRESHOLD:
+        return Intent.UNKNOWN, 0.0, ""
+    return _INTENT_OF[best_phrase], best_score, best_phrase

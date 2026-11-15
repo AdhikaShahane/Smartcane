@@ -142,7 +142,13 @@ class Camera:
     def _try_picamera2(self) -> bool:
         try:
             from picamera2 import Picamera2
-        except ImportError:
+        except ImportError as exc:
+            # This is the #1 reason a working CSI camera shows up as "mock".
+            # Log loudly: `rpicam-hello` working does NOT mean Python can see it.
+            log.warning("picamera2 not importable (%s). "
+                        "Fix: sudo apt install -y python3-picamera2, then make "
+                        "sure the venv can see /usr/lib/python3/dist-packages",
+                        exc)
             return False
         try:
             picam = Picamera2()
@@ -156,7 +162,7 @@ class Camera:
             self.backend = "picamera2"
             return True
         except Exception as exc:                        # noqa: BLE001
-            log.debug("picamera2 failed: %s", exc)
+            log.warning("picamera2 failed to start: %s", exc)
             return False
 
     def _grab(self) -> np.ndarray | None:
