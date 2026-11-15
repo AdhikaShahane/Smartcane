@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import config, intent
-from .util import StoppableThread, get_logger
+from .util import StoppableThread, get_logger, resolve_audio_device
 
 log = get_logger("asr")
 
@@ -137,12 +137,13 @@ class Asr:
         self._rec = KaldiRecognizer(self._model, config.MIC_RATE, grammar)
         self._rec.SetWords(False)
         self._vad = self._make_vad()
+        self._device = resolve_audio_device(config.AUDIO_INPUT_DEVICE, "in")
 
         try:
             self._stream = sd.RawInputStream(
                 samplerate=config.MIC_RATE, blocksize=config.MIC_BLOCK,
                 dtype="int16", channels=1, callback=self._cb,
-                device=config.AUDIO_INPUT_DEVICE)
+                device=self._device)
             self._stream.start()
         except Exception as exc:                        # noqa: BLE001
             log.error("cannot open microphone: %s", exc)

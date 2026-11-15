@@ -30,7 +30,7 @@ import numpy as np
 
 from . import config
 from .guidance import Announcement, Priority
-from .util import StoppableThread, get_logger
+from .util import StoppableThread, get_logger, resolve_audio_device
 
 log = get_logger("audio_out")
 
@@ -213,6 +213,7 @@ class AudioOut:
         self._interrupt = threading.Event()
         self._thread: StoppableThread | None = None
         self.tts = TtsEngine()
+        self.device = resolve_audio_device(config.AUDIO_OUTPUT_DEVICE, "out")
         self.last_text = ""
         self._last_spoken = ""
         self._last_spoken_at = 0.0
@@ -291,7 +292,7 @@ class AudioOut:
         self._interrupt.clear()
         try:
             sd.play(data.astype(np.float32), config.AUDIO_RATE, blocking=False,
-                    device=config.AUDIO_OUTPUT_DEVICE)
+                    device=self.device)
             while not self._interrupt.is_set():
                 stream = sd.get_stream()
                 if stream is None or not stream.active:

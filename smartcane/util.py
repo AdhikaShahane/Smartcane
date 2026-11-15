@@ -76,3 +76,35 @@ class StoppableThread(threading.Thread):
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def resolve_audio_device(device, kind: str):
+    """Validate a configured audio device against what PortAudio exposes.
+
+    `SMARTCANE_MIC=Jabra` is convenient until the headset is unplugged or the
+    name differs slightly -- then the old code raised "No input device matching"
+    and disabled the microphone entirely, which looks like a broken build on
+    stage. Fall back to the system default instead and say so in the log.
+
+    kind: "in" or "out"
+    """
+    if device is None:
+        return None
+    try:
+        import sounddevice as sd
+        if isinstance(device, int):
+            return device
+        want = str(device).lower()
+        for index, info in enumerate(sd.query_devices()):
+            if kind == "in" and info["max_input_channels"] <= 0:
+                continue
+            if kind == "out" and info["max_output_channels"] <= 0:
+                continue
+            if want in str(info["name"]).lower():
+                return index
+        get_logger("audio").warning(
+            "no %s device matching %r - using the system default instead",
+            "input" if kind == "in" else "output", device)
+        return None
+    except Exception:                                   # noqa: BLE001
+        return device
