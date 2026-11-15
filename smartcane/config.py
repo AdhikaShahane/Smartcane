@@ -108,6 +108,20 @@ VAD_FRAME = 512           # samples @16 kHz = 32 ms (Silero)
 VAD_END_SILENCE = 0.35    # trailing silence that ends an utterance
 TTS_VOLUME = 0.70         # capped: loud TTS leaks into the inline mic
 
+
+def _audio_device(env_name: str):
+    """Resolve a device from the environment: '' -> system default,
+    '3' -> index 3, 'Jabra' -> first device whose name contains 'Jabra'."""
+    value = os.getenv(env_name, "").strip()
+    if not value:
+        return None
+    return int(value) if value.isdigit() else value
+
+
+# e.g. SMARTCANE_MIC=Jabra  SMARTCANE_SPEAKER=Jabra
+AUDIO_INPUT_DEVICE = _audio_device("SMARTCANE_MIC")
+AUDIO_OUTPUT_DEVICE = _audio_device("SMARTCANE_SPEAKER")
+
 # ============================================================================
 # PATHS
 # ============================================================================

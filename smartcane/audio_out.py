@@ -290,7 +290,8 @@ class AudioOut:
 
         self._interrupt.clear()
         try:
-            sd.play(data.astype(np.float32), config.AUDIO_RATE, blocking=False)
+            sd.play(data.astype(np.float32), config.AUDIO_RATE, blocking=False,
+                    device=config.AUDIO_OUTPUT_DEVICE)
             while not self._interrupt.is_set():
                 stream = sd.get_stream()
                 if stream is None or not stream.active:

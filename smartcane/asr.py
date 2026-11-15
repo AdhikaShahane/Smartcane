@@ -141,7 +141,8 @@ class Asr:
         try:
             self._stream = sd.RawInputStream(
                 samplerate=config.MIC_RATE, blocksize=config.MIC_BLOCK,
-                dtype="int16", channels=1, callback=self._cb)
+                dtype="int16", channels=1, callback=self._cb,
+                device=config.AUDIO_INPUT_DEVICE)
             self._stream.start()
         except Exception as exc:                        # noqa: BLE001
             log.error("cannot open microphone: %s", exc)

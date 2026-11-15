@@ -233,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="auto | 0 | picamera2 | http://phone:8080/video")
     p.add_argument("--dump-serial", action="store_true",
                    help="print raw Arduino bytes (use this first when wiring)")
+    p.add_argument("--list-audio", action="store_true",
+                   help="list audio devices and exit (pick the Jabra/headset)")
     p.add_argument("--verbose", action="store_true", help="log state twice a second")
     p.add_argument("--duration", type=float, default=0.0,
                    help="stop after N seconds (0 = run forever)")
@@ -243,6 +245,20 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging("DEBUG" if args.verbose else config.LOG_LEVEL)
+
+    if args.list_audio:
+        try:
+            import sounddevice as sd
+            print(sd.query_devices())
+            print("\nDefault input :", sd.default.device[0])
+            print("Default output:", sd.default.device[1])
+            print("\nTo pin a device, export before running:")
+            print("  SMARTCANE_MIC=Jabra   SMARTCANE_SPEAKER=Jabra")
+        except Exception as exc:                        # noqa: BLE001
+            log.error("cannot query audio devices: %s", exc)
+            log.error("on the Pi this usually means: "
+                      "sudo apt install -y libportaudio2")
+        return 0
 
     if args.dump_serial:
         link = SerialLink(mock=args.mock, dump=True)
