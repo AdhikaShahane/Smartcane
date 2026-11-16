@@ -345,6 +345,30 @@ def test_resample() -> None:
                                              44100, 16000)) > 0)
 
 
+def test_persistent_hazard_repeats() -> None:
+    """A hazard that does not change must be restated.
+
+    Regression: announcements fire on transitions, so a person standing in
+    the path was announced once at the start and then never mentioned again.
+    The user was warned once and then left to walk into them in silence.
+    """
+    print("persistent hazard reminder")
+    import smartcane.config as cfg
+    g = Guidance(step_len=0.65)
+    t = 7000.0
+    count = 0
+    for _ in range(25):                      # 25 s of an unchanged obstacle
+        t += 1.0
+        ann = g.announce(g.assess(FakeSensor(1.2), None), now=t)
+        if ann:
+            count += 1
+    check("obstacle restated over 25 s", count >= 2, f"{count} announcements")
+    check("not chattering every second", count <= 8, f"{count} announcements")
+    expected = int(25 / cfg.REPEAT_AFTER_SEC) + 1
+    check("roughly one per REPEAT_AFTER_SEC", abs(count - expected) <= 1,
+          f"{count} vs ~{expected}")
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -354,6 +378,7 @@ def main() -> int:
     test_steps()
     test_state_machine()
     test_cooldown_isolation()
+    test_persistent_hazard_repeats()
     test_phrasing()
     test_distance_scaling()
     test_resample()

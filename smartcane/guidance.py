@@ -178,6 +178,13 @@ class Guidance:
         key = f"{sit.state}:{sit.label}:{sit.zone}:{sit.steps}"
         changed = (sit.state != self._state) or (key != self._last_key)
 
+        # A hazard that does not change must still be restated now and then.
+        # Announcements fire on transitions, so without this a person standing
+        # in the path was announced once and then never mentioned again --
+        # the user was told once and left to walk into them in silence.
+        if not changed and (now - self._last_hazard_at) >= config.REPEAT_AFTER_SEC:
+            changed = True
+
         # SAFETY: a cooldown must never silence an urgent warning. Only
         # ADVISORY chatter is rate-limited; URGENT and STOP may interrupt,
         # with a much shorter guard so they cannot machine-gun the speaker.

@@ -104,6 +104,10 @@ ANNOUNCE_COOLDOWN_SEC = 3.0     # per-obstacle silence between repeats
 GLOBAL_COOLDOWN_SEC = 1.2       # minimum gap between any two utterances
 URGENT_MIN_GAP_SEC = 0.8        # URGENT/STOP bypass the cooldown, but not this
 SPEAK_CLEAR_AFTER_SEC = 6.0     # say "path clear" only after this much silence
+# A hazard that just sits there must be restated now and then, otherwise the
+# user is warned once and then walks into it in silence. Announcements fire on
+# change, so this is the maximum silence for an unchanged situation.
+REPEAT_AFTER_SEC = 8.0
 
 # ============================================================================
 # AUDIO
