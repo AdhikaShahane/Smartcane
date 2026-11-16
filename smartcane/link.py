@@ -49,6 +49,7 @@ class SensorState:
     gps_fix: int = 0
     gps_lat: float | None = None
     gps_lon: float | None = None
+    sensor_fault: bool = False
     updated_at: float = 0.0
     frames: int = 0
     source: str = "none"
@@ -108,7 +109,9 @@ class SerialLink:
             return SensorState(
                 dist_cm=self._state.dist_cm, motion=self._state.motion,
                 gps_fix=self._state.gps_fix, gps_lat=self._state.gps_lat,
-                gps_lon=self._state.gps_lon, updated_at=self._state.updated_at,
+                gps_lon=self._state.gps_lon,
+                sensor_fault=self._state.sensor_fault,
+                updated_at=self._state.updated_at,
                 frames=self._state.frames, source=self._state.source)
 
     # -- internals ---------------------------------------------------------
@@ -198,10 +201,12 @@ class SerialLink:
             del buf[:total]
             if ftype == TYPE_FAST and len(payload) >= 4:
                 # seq:u8, dist_cm:u16, flags:u8
-                #   bit0 = reflex asserted, bit1 = motion detected
+                #   bit0 = reflex asserted, bit1 = motion, bit2 = sensor fault
                 dist = payload[1] | (payload[2] << 8)
+                flags = payload[3]
                 self._publish(dist_cm=float(dist),
-                              motion=(payload[3] >> 1) & 0x01)
+                              motion=(flags >> 1) & 0x01,
+                              sensor_fault=bool(flags & 0x04))
             elif ftype == TYPE_SLOW and len(payload) >= 11:
                 fix, sats = payload[0], payload[1]
                 lat = int.from_bytes(payload[2:6], "little", signed=True) / 1e7

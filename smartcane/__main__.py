@@ -34,6 +34,7 @@ class SmartCane:
                        on_speech_start=self.on_speech_start,
                        mock=args.mock)
         self._last_query_at = 0.0
+        self._fault_warned = False
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -202,11 +203,24 @@ class SmartCane:
                 if self.args.verbose and time.monotonic() - last_log > 2.0:
                     last_log = time.monotonic()
                     log.info("state=%-8s dist=%-6s obj=%-10s "
-                             "infer=%.0fms frames=%d",
+                             "infer=%.0fms frames=%d%s",
                              sit.state,
                              f"{sit.dist_m:.2f}m" if sit.dist_m else "-",
                              sit.label or "-", scene.infer_ms,
-                             sensor.frames)
+                             sensor.frames,
+                             "  <== SENSOR FAULT" if sensor.sensor_fault
+                             else "")
+
+                # A dead ultrasonic reads as "clear" by design, so say so out
+                # loud once instead of letting it look like an empty corridor.
+                if sensor.sensor_fault and not self._fault_warned:
+                    log.warning("ultrasonic is returning no valid readings - "
+                                "check the sensor wiring; obstacle detection "
+                                "is NOT active")
+                    self._fault_warned = True
+                elif not sensor.sensor_fault and self._fault_warned:
+                    log.info("ultrasonic recovered")
+                    self._fault_warned = False
 
                 if self.args.duration and \
                         time.monotonic() - self._started > self.args.duration:
