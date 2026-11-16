@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import config, intent
-from .util import StoppableThread, get_logger, resolve_audio_device
+from .util import StoppableThread, get_logger, resample, resolve_audio_device
 
 log = get_logger("asr")
 
@@ -110,6 +110,7 @@ class Asr:
             1, int(config.PREROLL_SEC * config.MIC_RATE / config.MIC_BLOCK)))
         self._vad = None
         self._thread: StoppableThread | None = None
+        self._capture_rate = config.MIC_RATE
         self._speaking = False
         self._silence = 0.0
         self._started_at = 0.0
@@ -139,19 +140,38 @@ class Asr:
         self._rec.SetWords(False)
         self._vad = self._make_vad()
         self._device = resolve_audio_device(self.device, "in")
-        log.info("microphone: device=%s (%s)",
-                 self._device if self._device is not None else "system default",
-                 config.MIC_RATE)
 
-        try:
-            self._stream = sd.RawInputStream(
-                samplerate=config.MIC_RATE, blocksize=config.MIC_BLOCK,
-                dtype="int16", channels=1, callback=self._cb,
-                device=self._device)
-            self._stream.start()
-        except Exception as exc:                        # noqa: BLE001
-            log.error("cannot open microphone: %s", exc)
+        # Vosk needs 16 kHz, but PortAudio does NOT resample: asking a 48 kHz
+        # USB headset for 16 kHz raises "Invalid sample rate" and the mic looks
+        # broken. Try 16 kHz first, then fall back to a rate the device does
+        # support and resample ourselves.
+        self._capture_rate = config.MIC_RATE
+        opened = False
+        for rate in (config.MIC_RATE, 48000, 44100, 32000):
+            block = int(rate * 0.05)                    # 50 ms
+            try:
+                self._stream = sd.RawInputStream(
+                    samplerate=rate, blocksize=block,
+                    dtype="int16", channels=1, callback=self._cb,
+                    device=self._device)
+                self._stream.start()
+                self._capture_rate = rate
+                opened = True
+                break
+            except Exception as exc:                    # noqa: BLE001
+                log.debug("cannot open mic at %d Hz: %s", rate, exc)
+                self._stream = None
+
+        if not opened:
+            log.error("cannot open microphone at any supported rate "
+                      "(16k/48k/44.1k/32k). Check: arecord -l")
             return
+
+        log.info("microphone: device=%s  %d Hz%s",
+                 self._device if self._device is not None else "system default",
+                 self._capture_rate,
+                 "" if self._capture_rate == config.MIC_RATE
+                 else f" -> resampled to {config.MIC_RATE}")
 
         self.enabled = True
         self._thread = _Process(self)
@@ -190,6 +210,14 @@ class Asr:
     # -- processing --------------------------------------------------------
     def feed(self, chunk: bytes) -> None:
         frame = np.frombuffer(chunk, dtype=np.int16)
+
+        # Normalise to 16 kHz before anything else, so the VAD and the pre-roll
+        # buffer always see the rate Vosk expects.
+        if self._capture_rate != config.MIC_RATE and frame.size:
+            f32 = frame.astype(np.float32) / 32768.0
+            f32 = resample(f32, self._capture_rate, config.MIC_RATE)
+            frame = np.clip(f32 * 32768.0, -32768, 32767).astype(np.int16)
+            chunk = frame.tobytes()
 
         # keep the ring buffer full regardless of VAD state
         self._preroll.append(frame)

@@ -78,6 +78,40 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def resample(pcm, src_rate: int, dst_rate: int):
+    """Resample mono float audio between rates.
+
+    Needed because Vosk only accepts 16 kHz while many USB headsets only
+    support 44.1 or 48 kHz. PortAudio does NOT resample for you: asking a
+    48 kHz device for 16 kHz raises "Invalid sample rate" and the microphone
+    appears broken.
+    """
+    import numpy as np
+    if src_rate == dst_rate or len(pcm) == 0:
+        return pcm
+    try:
+        import soxr
+        return soxr.resample(np.asarray(pcm, dtype=np.float32),
+                             src_rate, dst_rate)
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(src_rate, dst_rate)
+        return resample_poly(np.asarray(pcm, dtype=np.float32),
+                             dst_rate // g, src_rate // g)
+    except Exception:                                   # noqa: BLE001
+        pass
+    n_out = int(round(len(pcm) * dst_rate / src_rate))
+    if n_out <= 0:
+        return np.zeros(0, dtype=np.float32)
+    x_old = np.linspace(0.0, 1.0, len(pcm), endpoint=False)
+    x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
+    return np.interp(x_new, x_old,
+                     np.asarray(pcm, dtype=np.float32)).astype(np.float32)
+
+
 def resolve_audio_device(device, kind: str):
     """Pick an audio device, and never leave the system with no audio at all.
 

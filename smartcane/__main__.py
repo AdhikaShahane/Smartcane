@@ -268,13 +268,28 @@ def _test_mic(device, seconds: float = 4.0) -> int:
 
     print(f"\nRecording {seconds:.0f}s from: {info['name']}")
     print(">>> SPEAK NOW: count out loud, one two three four <<<\n")
-    try:
-        rec = sd.rec(int(seconds * 16000), samplerate=16000, channels=1,
-                     dtype="int16", device=resolved)
-        sd.wait()
-    except Exception as exc:                            # noqa: BLE001
-        print(f"recording failed: {exc}")
+
+    # The device may not support 16 kHz. PortAudio refuses rates the hardware
+    # does not offer, so try the same ladder the real microphone path uses --
+    # otherwise this test reports MIC DEAD on perfectly good hardware.
+    rec = None
+    used_rate = 0
+    for rate in (16000, 48000, 44100, 32000):
+        try:
+            rec = sd.rec(int(seconds * rate), samplerate=rate, channels=1,
+                         dtype="int16", device=resolved)
+            sd.wait()
+            used_rate = rate
+            break
+        except Exception as exc:                        # noqa: BLE001
+            print(f"  could not record at {rate} Hz: {exc}")
+            rec = None
+    if rec is None:
+        print("\nRESULT: MIC DEAD - the device would not open at any rate.")
+        print("  Check it is not in use by another program, then: arecord -l")
         return 1
+    if used_rate != 16000:
+        print(f"  (recorded at {used_rate} Hz - smartcane will resample this)")
 
     data = rec.astype("float32")
     peak = float(np.max(np.abs(data))) if data.size else 0.0

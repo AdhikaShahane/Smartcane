@@ -323,6 +323,28 @@ def test_distance_scaling() -> None:
           estimate_distance("toaster", 300, 640) is None)
 
 
+def test_resample() -> None:
+    """Vosk needs 16 kHz; many USB headsets only do 48 kHz.
+
+    PortAudio refuses to open a rate the device does not support, so without
+    this the microphone looks broken on perfectly good hardware.
+    """
+    print("resampling")
+    import numpy as np
+    from smartcane.util import resample
+
+    x = np.full(4800, 0.5, dtype=np.float32)
+    y = resample(x, 48000, 16000)
+    check("48k -> 16k is a third of the length",
+          abs(len(y) - 1600) <= 2, f"{len(x)} -> {len(y)}")
+    check("amplitude preserved",
+          abs(float(np.mean(np.abs(y))) - 0.5) < 0.05,
+          f"{float(np.mean(np.abs(y))):.3f}")
+    check("same rate is a no-op", len(resample(x, 16000, 16000)) == len(x))
+    check("44.1k -> 16k works", len(resample(np.zeros(4410, np.float32),
+                                             44100, 16000)) > 0)
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -334,6 +356,7 @@ def main() -> int:
     test_cooldown_isolation()
     test_phrasing()
     test_distance_scaling()
+    test_resample()
     test_earcons()
     test_serial_parsers()
     print("=" * 60)

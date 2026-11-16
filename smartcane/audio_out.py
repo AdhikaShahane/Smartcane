@@ -30,7 +30,8 @@ import numpy as np
 
 from . import config
 from .guidance import Announcement, Priority
-from .util import StoppableThread, get_logger, resolve_audio_device
+from .util import (StoppableThread, get_logger, resample,
+                   resolve_audio_device)
 
 log = get_logger("audio_out")
 
@@ -44,33 +45,8 @@ except (ImportError, OSError) as _exc:                  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
-# resampling: one rate everywhere
+# resampling lives in util.resample so the microphone path can use it too
 # ---------------------------------------------------------------------------
-def resample(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-    if src_rate == dst_rate or pcm.size == 0:
-        return pcm
-    try:
-        import soxr
-        return soxr.resample(pcm.astype(np.float32), src_rate, dst_rate)
-    except Exception:                                   # noqa: BLE001
-        pass
-    try:
-        from scipy.signal import resample_poly
-        from math import gcd
-        g = gcd(src_rate, dst_rate)
-        out = resample_poly(pcm.astype(np.float32),
-                            dst_rate // g, src_rate // g)
-        return out
-    except Exception:                                   # noqa: BLE001
-        pass
-    n_out = int(round(len(pcm) * dst_rate / src_rate))
-    if n_out <= 0:
-        return np.zeros(0, dtype=np.float32)
-    x_old = np.linspace(0.0, 1.0, len(pcm), endpoint=False)
-    x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
-    return np.interp(x_new, x_old, pcm.astype(np.float32)).astype(np.float32)
-
-
 def _to_float(pcm: np.ndarray) -> np.ndarray:
     if pcm.dtype == np.int16:
         return pcm.astype(np.float32) / 32768.0
