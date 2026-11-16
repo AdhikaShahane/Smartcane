@@ -122,6 +122,7 @@ class TtsEngine:
         self._piper_model = None
         self._piper_bin = None
         self._espeak = None
+        self._voice = None
         self._cache: dict[str, tuple[np.ndarray, int]] = {}
         self._cache_order: list[str] = []
         self._detect()
@@ -179,19 +180,77 @@ class TtsEngine:
         return result
 
     def _synth_piper(self, text: str):
+        """Synthesize with Piper.
+
+        Piper's command-line flags have changed between releases
+        (--output-raw vs --output_file vs -f), so the Python API is tried
+        first and the CLI is only a fallback. Getting this wrong would silently
+        drop the user back to the robotic espeak voice, which is the exact
+        complaint we are fixing.
+        """
+        # ---- strategy 1: the Python API --------------------------------
         try:
+            try:
+                from piper import PiperVoice          # piper-tts >= 1.3
+            except ImportError:
+                from piper.voice import PiperVoice    # piper-tts 1.2.x
+            if self._voice is None:
+                self._voice = PiperVoice.load(str(self._piper_model))
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                if hasattr(self._voice, "synthesize_wav"):
+                    self._voice.synthesize_wav(text, wf)
+                else:
+                    self._voice.synthesize(text, wf)
+            buf.seek(0)
+            with wave.open(buf, "rb") as wf:
+                rate = wf.getframerate()
+                frames = wf.readframes(wf.getnframes())
+                channels = wf.getnchannels()
+            pcm = np.frombuffer(frames, dtype=np.int16)
+            if channels > 1:
+                pcm = pcm.reshape(-1, channels).mean(axis=1).astype(np.int16)
+            if pcm.size:
+                self.rate = rate
+                return pcm, rate
+        except Exception as exc:                        # noqa: BLE001
+            log.debug("piper python API unavailable: %s", exc)
+
+        # ---- strategy 2: CLI writing raw PCM ---------------------------
+        for flag in ("--output-raw", "--output_raw"):
+            try:
+                proc = subprocess.run(
+                    [self._piper_bin, "--model", str(self._piper_model), flag],
+                    input=text.encode("utf-8"), capture_output=True, timeout=25)
+                if proc.returncode == 0 and proc.stdout:
+                    return np.frombuffer(proc.stdout, dtype=np.int16), self.rate
+            except Exception as exc:                    # noqa: BLE001
+                log.debug("piper %s failed: %s", flag, exc)
+
+        # ---- strategy 3: CLI writing a temp wav ------------------------
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                path = tmp.name
             proc = subprocess.run(
                 [self._piper_bin, "--model", str(self._piper_model),
-                 "--output-raw"],
-                input=text.encode("utf-8"), capture_output=True, timeout=20)
-            if proc.returncode != 0 or not proc.stdout:
-                log.warning("piper failed: %s", proc.stderr[:200])
-                return None
-            pcm = np.frombuffer(proc.stdout, dtype=np.int16)
-            return pcm, self.rate
+                 "--output_file", path],
+                input=text.encode("utf-8"), capture_output=True, timeout=25)
+            if proc.returncode == 0:
+                with wave.open(path, "rb") as wf:
+                    rate = wf.getframerate()
+                    frames = wf.readframes(wf.getnframes())
+                    channels = wf.getnchannels()
+                pcm = np.frombuffer(frames, dtype=np.int16)
+                if channels > 1:
+                    pcm = pcm.reshape(-1, channels).mean(axis=1).astype(np.int16)
+                self.rate = rate
+                return pcm, rate
         except Exception as exc:                        # noqa: BLE001
-            log.warning("piper error: %s", exc)
-            return None
+            log.warning("piper CLI failed: %s", exc)
+
+        log.warning("piper could not synthesize - falling back to espeak")
+        return None
 
     def _synth_espeak(self, text: str):
         # espeak defaults are shrill and machine-like. A female variant at a

@@ -299,6 +299,30 @@ def test_cooldown_isolation() -> None:
           str([text for d, text in events if d == 1.2]))
 
 
+def test_distance_scaling() -> None:
+    """Distance must not depend on the camera resolution.
+
+    The phone webcam often streams at 1280 or 1920 wide while FOCAL_PX is
+    calibrated for 640. Without scaling, every distance is wrong by that
+    ratio -- a person 2 m away reads as 1 m at 1280 wide.
+    """
+    print("distance scaling")
+    from smartcane.vision import estimate_distance
+
+    a = estimate_distance("person", 300, 640)
+    b = estimate_distance("person", 600, 1280)   # same scene, double resolution
+    check("resolution independent", a is not None and b is not None
+          and abs(a - b) < 0.05, f"{a} vs {b}")
+
+    near = estimate_distance("person", 600, 640)
+    far = estimate_distance("person", 300, 640)
+    check("bigger box means closer", near is not None and far is not None
+          and near < far, f"{near} < {far}")
+
+    check("unknown class returns None",
+          estimate_distance("toaster", 300, 640) is None)
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -309,6 +333,7 @@ def main() -> int:
     test_state_machine()
     test_cooldown_isolation()
     test_phrasing()
+    test_distance_scaling()
     test_earcons()
     test_serial_parsers()
     print("=" * 60)

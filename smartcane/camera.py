@@ -175,19 +175,20 @@ class Camera:
                         source)
 
         if source != "scan":
-            # 1. the CSI camera, if this Pi has one
+            # 1. the phone webcam we used last time. Its IP may have changed,
+            #    but when it has not this connects in under a second instead of
+            #    spending ~10 s probing local cameras first.
+            cached = self._load_cached()
+            if cached and self._try_cv2(cached):
+                log.info("using remembered camera URL %s", cached)
+                return True
+            # 2. the CSI camera, if this Pi has one
             if self._try_picamera2():
                 return True
-            # 2. a USB webcam
+            # 3. a USB webcam
             for idx in (0, 1, 2):
                 if self._try_cv2(idx):
                     return True
-
-        # 3. the phone webcam we used last time (its IP may have changed)
-        cached = self._load_cached()
-        if cached and self._try_cv2(cached):
-            log.info("using remembered camera URL %s", cached)
-            return True
 
         # 4. scan the local network for a webcam server
         for url in discover_ip_webcams():
@@ -200,8 +201,16 @@ class Camera:
 
     def _try_cv2(self, source) -> bool:
         try:
-            cap = cv2.VideoCapture(source)
-            if not cap.isOpened():
+            # Set open/read timeouts BEFORE opening. Without these, a stale
+            # network URL (the phone changed IP) can block for 30+ seconds,
+            # which is what made reconnecting feel chaotic.
+            cap = cv2.VideoCapture()
+            try:
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
+            except Exception:                           # noqa: BLE001
+                pass
+            if not cap.open(source):
                 cap.release()
                 return False
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAM_WIDTH)

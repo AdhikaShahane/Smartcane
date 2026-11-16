@@ -1,4 +1,4 @@
-"""Object detection, zone classification and tracking.
+﻿"""Object detection, zone classification and tracking.
 
 The zone/hysteresis and movement-analysis logic is ported from
 `detect_webcam.py` (Ishwari's engine) because it was the strongest part of the
@@ -105,12 +105,20 @@ class Scene:
         return min(pool, key=lambda o: (o.dist_m if o.dist_m else 99.0))
 
 
-def estimate_distance(label: str, box_h: float) -> float | None:
-    """Monocular pinhole estimate: dist = real_height * f_px / box_height_px."""
+def estimate_distance(label: str, box_h: float,
+                      frame_width: int = config.CAM_WIDTH) -> float | None:
+    """Monocular pinhole estimate: dist = real_height * f_px / box_height_px.
+
+    FOCAL_PX is calibrated for a 640-wide frame. A phone webcam often streams
+    at 1280 or 1920 wide, and the focal length *in pixels* scales with the
+    frame width. Without this correction every distance is wrong by that
+    ratio -- a person 2 m away reads as 1 m at 1280 wide.
+    """
     real_h = config.OBJ_HEIGHTS.get(label)
     if real_h is None or box_h <= 4:
         return None
-    raw = (real_h * config.FOCAL_PX) / box_h
+    f_px = config.FOCAL_PX * (max(1, frame_width) / float(config.CAM_WIDTH))
+    raw = (real_h * f_px) / box_h
     return clamp(raw, 0.4, 20.0)
 
 
@@ -281,7 +289,7 @@ class Vision:
                 trk.history.append((det.cx, det.cy, det.h, now))
                 trk.x, trk.y = det.cx, det.cy
                 trk.box_h, trk.box_w = det.h, det.w
-                trk.dist_m = estimate_distance(det.label, det.h)
+                trk.dist_m = estimate_distance(det.label, det.h, width)
                 trk.zone = zone_of(det.cx, width, trk.zone)
                 trk.hits += 1
                 trk.best_conf = max(trk.best_conf, det.conf)
@@ -295,7 +303,7 @@ class Vision:
                     tid=tid, label=det.label, x=det.cx, y=det.cy,
                     box_h=det.h, box_w=det.w,
                     zone=zone_of(det.cx, width), hits=1, last_seen=now,
-                    dist_m=estimate_distance(det.label, det.h),
+                    dist_m=estimate_distance(det.label, det.h, width),
                     best_conf=det.conf,
                     history=deque([(det.cx, det.cy, det.h, now)], maxlen=8))
                 matched.add(tid)
