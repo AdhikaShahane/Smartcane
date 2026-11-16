@@ -16,10 +16,15 @@ Estimated time: 60–90 minutes on a fresh Pi, mostly downloading.
 | Pi Camera Module (OV5647 / v1.3) | CSI ribbon, blue side toward the USB ports |
 | USB headset **with microphone** | Jabra Evolve2 30 SE or similar |
 | Arduino Uno | USB cable to the Pi |
-| HC-SR04 ultrasonic | 4 wires to the Arduino |
+| **Grove Ultrasonic Ranger V2.0** | 3 wires: GND, 5V, SIG. Not an HC-SR04 |
 | 32 GB SD card | class 10 |
 
 That is the whole build. No GPS, no accelerometer, no motor.
+
+> ⚠️ **The sensor is a Grove Ultrasonic Ranger V2.0, not an HC-SR04.** They are
+> wired differently and the code is different. The Ranger has pins labelled
+> `GND VCC NC SIG` — trigger and echo share the single SIG wire. An HC-SR04
+> has separate TRIG and ECHO pins and will not work with this sketch.
 
 ---
 
@@ -29,17 +34,20 @@ That is the whole build. No GPS, no accelerometer, no motor.
 2. **No libraries to install** — it uses only what ships with the IDE.
 3. Upload to the Uno.
 
-**Wiring — 4 wires, nothing else:**
+**Wiring — the Grove Ranger needs 3 wires, not 4:**
 
-| HC-SR04 | Arduino pin |
-|---|---|
-| VCC | 5V |
-| GND | GND |
-| TRIG | D7 |
-| ECHO | D8 |
+| Grove wire | Board label | Arduino pin |
+|---|---|---|
+| **Black** | GND | GND (POWER header) |
+| **Red** | VCC | **5V** (POWER header — not RESET, not 3V3) |
+| **White** | NC | *leave unconnected* |
+| **Yellow** | SIG | **D7** (DIGITAL header) |
 
 D13 is the Uno's own onboard LED. It lights whenever something is closer than
 60 cm — no wiring needed, and it is the quickest way to see the sensor working.
+
+The module needs **at least 60 ms between pings**; the sketch measures every
+80 ms and streams to the Pi at 20 Hz.
 
 ---
 

@@ -5,20 +5,21 @@ runs the perception and speech stack; an Arduino Uno streams ultrasonic
 distance to it over serial.
 
 **Current hardware build:** Pi Camera Module, USB headset (mic + headphones),
-and an Arduino Uno with an HC-SR04. Nothing else — no GPS, no accelerometer, no
-motor. The code still runs correctly if any of the three is missing, and says so.
+and an Arduino Uno with a **Grove Ultrasonic Ranger V2.0**. Nothing else — no
+GPS, no accelerometer, no motor. The code still runs correctly if any of the
+three is missing, and says so.
 
 ```
    Arduino Uno  (sensor only)      Raspberry Pi 4
   ┌──────────────────────┐      ┌──────────────────────────────┐
-  │ HC-SR04   20 Hz      │      │ REFLEX   distance -> earcon  │
-  │ median-of-3          │  USB │ VISION   YOLO@320 + tracker  │
-  │ LED13 when < 60 cm   │ ───► │ DIALOGUE Vosk + grammar      │
-  └──────────────────────┘      │ ARBITER  one speaker owner   │
-                                │          piper / espeak      │
-        Camera   ── CSI ───────►│                              │
-        Headset  ── USB ───────►│                              │
+  │ Grove Ranger  20 Hz  │      │ REFLEX   distance -> earcon  │
+  │ one-wire trig/echo   │  USB │ VISION   YOLO@320 + tracker  │
+  │ median-of-3          │ ───► │ DIALOGUE Vosk + grammar      │
+  │ LED13 when < 60 cm   │      │ ARBITER  one speaker owner   │
+  └──────────────────────┘      │          piper / espeak      │
                                 └──────────────────────────────┘
+        Camera   ── CSI ───────►
+        Headset  ── USB ───────►
 ```
 
 ## What it does
