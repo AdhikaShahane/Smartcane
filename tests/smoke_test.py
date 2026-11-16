@@ -197,7 +197,22 @@ def test_serial_parsers() -> None:
     check("Distance: 150.0 parsed", link.state().dist_cm == 150.0,
           str(link.state().dist_cm))
 
-    # 2. our binary protocol
+    # 2. corrupted digit must NOT become a 1 cm obstacle
+    link_bad = SerialLink(mock=False)
+    link_bad.feed(b"Distance: 150.0 cm  | PATH CLEAR\r\n")
+    good = link_bad.state().dist_cm
+    link_bad.feed(b"Distance: 1s.7 cm  | PATH CLEAR\r\n")
+    check("corrupt line discarded, keeps last good",
+          link_bad.state().dist_cm == good, f"was {good}, now "
+          f"{link_bad.state().dist_cm}")
+
+    link_corrupt = SerialLink(mock=False)
+    link_corrupt.feed(b"Distance: 1s.7 cm  | PATH CLEAR\r\n")
+    check("corrupt-only stream yields no distance",
+          link_corrupt.state().dist_cm is None,
+          str(link_corrupt.state().dist_cm))
+
+    # 3. our binary protocol
     link2 = SerialLink(mock=False)
     body = bytes([0xAA, 0x55, 0x01, 0x04, 7, 0x2C, 0x01, 0x00])
     link2.feed(body + bytes([crc8(body)]))

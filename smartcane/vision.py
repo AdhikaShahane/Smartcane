@@ -69,11 +69,16 @@ class TrackedObject:
     last_seen: float
     dist_m: float | None
     movement: str = "stationary"
+    best_conf: float = 0.0
     history: deque = field(default_factory=lambda: deque(maxlen=8))
 
     @property
     def confirmed(self) -> bool:
-        return self.hits >= config.TRACK_MIN_HITS
+        # Two frames of evidence, OR one very confident frame. Waiting for a
+        # second frame costs ~330 ms at 3 detections/sec, which is exactly the
+        # delay that matters when a person steps into the path.
+        return (self.hits >= config.TRACK_MIN_HITS
+                or self.best_conf >= config.FAST_CONFIRM_CONF)
 
 
 @dataclass
@@ -279,6 +284,7 @@ class Vision:
                 trk.dist_m = estimate_distance(det.label, det.h)
                 trk.zone = zone_of(det.cx, width, trk.zone)
                 trk.hits += 1
+                trk.best_conf = max(trk.best_conf, det.conf)
                 trk.last_seen = now
                 trk.movement = _movement(trk)
                 matched.add(best_id)
@@ -290,6 +296,7 @@ class Vision:
                     box_h=det.h, box_w=det.w,
                     zone=zone_of(det.cx, width), hits=1, last_seen=now,
                     dist_m=estimate_distance(det.label, det.h),
+                    best_conf=det.conf,
                     history=deque([(det.cx, det.cy, det.h, now)], maxlen=8))
                 matched.add(tid)
 

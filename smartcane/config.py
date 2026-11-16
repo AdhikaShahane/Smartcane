@@ -36,7 +36,7 @@ CAM_STALE_SEC = 1.0
 # VISION
 # ============================================================================
 YOLO_IMGSZ = 320          # 320 is ~4x faster than 640 on a Pi 4. Do not raise.
-YOLO_CONF = 0.40
+YOLO_CONF = 0.35          # lower = catches more objects, more false positives
 YOLO_IOU = 0.45
 DETECT_FPS = 8            # inference target; tracking fills the gaps
 
@@ -69,6 +69,10 @@ ZONE_HYSTERESIS = 0.04    # deadband so objects do not flicker left/right
 TRACK_MAX_AGE = 1.0       # seconds before an unmatched track is dropped
 TRACK_MAX_DIST = 140      # px, max centroid jump to be considered the same object
 TRACK_MIN_HITS = 2        # frames a track must exist before it may be announced
+# A very confident first sighting is announced immediately instead of waiting
+# for a second frame. At ~3 detections/sec, waiting costs ~330 ms of delay on
+# exactly the case that matters most: someone stepping into the path.
+FAST_CONFIRM_CONF = 0.65
 
 # ============================================================================
 # DISTANCE / STATE THRESHOLDS  (metres)

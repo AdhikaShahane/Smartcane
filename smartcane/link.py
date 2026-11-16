@@ -38,6 +38,19 @@ _KV_LINE = re.compile(rb"[A-Za-z_][A-Za-z_0-9]*\s*[:=]\s*-?\d")
 _CSV_LINE = re.compile(rb"^\s*-?\d+(\.\d+)?\s*[,;]")
 _BARE_NUMBER = re.compile(rb"^\s*-?\d+(\.\d+)?\s*$")
 
+# Distance values must be followed by a unit or a separator. Without that rule
+# a corrupted line such as "Distance: 1s.7 cm" matches the leading "1" and the
+# Pi believes there is an obstacle 1 cm away.
+_KV_RE = re.compile(
+    r"([a-zA-Z_][a-zA-Z_0-9]*)\s*[:=]\s*(-?\d+(?:\.\d+)?)\s*"
+    r"(?:cm|mm|metres?|meters?|m\b|$|\||,|;)",
+    re.IGNORECASE)
+
+# The Grove Ranger cannot see closer than 2 cm or further than 350 cm, so any
+# reading outside this window is a corrupt frame, not a distance.
+DIST_MIN_CM = 2.0
+DIST_MAX_CM = 400.0
+
 
 def _crc8(data: bytes) -> int:
     crc = 0
@@ -282,6 +295,10 @@ class SerialLink:
         if dist is None:
             dist = vals.get("d")
         # A sketch that prints "Distance: 150.0 cm" is already in centimetres.
+        if dist is not None and not (DIST_MIN_CM <= dist <= DIST_MAX_CM):
+            # Corrupt or out-of-range frame: drop it rather than act on it.
+            log.debug("discarding implausible distance %s in %r", dist, text)
+            return
         self._publish(
             dist_cm=dist,
             motion=int(vals.get("mot", vals.get("m", 0))),
