@@ -1,18 +1,24 @@
 # Sahayak Drishti — AI Smart Cane
 
 An assistive navigation system for visually impaired users. A Raspberry Pi 4
-runs the perception and speech stack; an Arduino Uno owns the timing-critical
-sensors and a hardware reflex that works even if the Pi fails.
+runs the perception and speech stack; an Arduino Uno streams ultrasonic
+distance to it over serial.
+
+**Current hardware build:** Pi Camera Module, USB headset (mic + headphones),
+and an Arduino Uno with an HC-SR04. Nothing else — no GPS, no accelerometer, no
+motor. The code still runs correctly if any of the three is missing, and says so.
 
 ```
-        Arduino Uno                         Raspberry Pi 4
-  ┌──────────────────────┐          ┌──────────────────────────────┐
-  │ HC-SR04  20 Hz       │          │ REFLEX   distance -> earcon  │
-  │ MPU6050  gait        │  serial  │ VISION   YOLO@320 + tracker  │
-  │ GPS      position    │ ───────► │ DIALOGUE Vosk + grammar      │
-  │ MOTOR    < 60 cm     │ 115200   │ ARBITER  one speaker owner   │
-  │  (hard reflex, <10ms)│          │          piper / espeak      │
-  └──────────────────────┘          └──────────────────────────────┘
+   Arduino Uno  (sensor only)      Raspberry Pi 4
+  ┌──────────────────────┐      ┌──────────────────────────────┐
+  │ HC-SR04   20 Hz      │      │ REFLEX   distance -> earcon  │
+  │ median-of-3          │  USB │ VISION   YOLO@320 + tracker  │
+  │ LED13 when < 60 cm   │ ───► │ DIALOGUE Vosk + grammar      │
+  └──────────────────────┘      │ ARBITER  one speaker owner   │
+                                │          piper / espeak      │
+        Camera   ── CSI ───────►│                              │
+        Headset  ── USB ───────►│                              │
+                                └──────────────────────────────┘
 ```
 
 ## What it does
@@ -29,15 +35,16 @@ sensors and a hardware reflex that works even if the Pi fails.
 ## Design rules
 
 1. **Nothing in the safety path depends on a model, a network, or a sentence.**
-   The ultrasonic + motor reflex is <10 ms and independent of the Pi.
+   The ultrasonic reports 20 times a second and drives the earcon directly; the
+   detector and the recogniser are never in that path.
 2. **One owner of the speaker.** Every utterance goes through a single priority
    queue. Two threads calling TTS at once was the cause of the garbled audio in
    the previous version.
 3. **Announce on transitions, not on a timer.** Repeated states are silence.
 4. **Never claim more path than has been verified.** Step counts are capped by
    the sensor horizon minus a stopping margin.
-5. **Never invent data.** If GPS has no fix, it says so. If the battery cannot be
-   read, it says so. The previous version answered "the person is on your right"
+5. **Never invent data.** If a sensor is missing or a value cannot be read, it
+   says so. The previous version answered "the person is on your right"
    regardless of what the camera saw.
 
 ## Quick start
@@ -81,9 +88,9 @@ docs/DEPLOY.md                  the guide to follow on the Pi
 
 | Stage | Latency |
 |---|---|
-| Hardware reflex (ultrasonic → motor) | < 10 ms |
-| Distance → earcon | ~60 ms |
+| Ultrasonic reading → earcon | ~60 ms |
 | Detection (ncnn @320) | 53–133 ms |
+| Detection (PyTorch @320, no export) | ~300 ms |
 | Voice answer end to end | 500–900 ms |
 
 The previous version took 1.5–2.5 s to warn and 2.5–4 s to answer, because

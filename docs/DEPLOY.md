@@ -14,39 +14,32 @@ Estimated time: 60–90 minutes on a fresh Pi, mostly downloading.
 |---|---|
 | Raspberry Pi 4B (4 GB) | 64-bit Raspberry Pi OS Bookworm |
 | Pi Camera Module (OV5647 / v1.3) | CSI ribbon, blue side toward the USB ports |
-| Arduino Uno | with a USB cable to the Pi |
-| HC-SR04 ultrasonic | on the Arduino |
-| MPU6050 | on the Arduino, I2C |
-| GPS NEO-6M | on the Arduino, serial |
-| Wired headset **with inline mic** | plugs into the Pi 3.5 mm combo jack |
-| Vibration motor + transistor | optional, but it is the real safety path |
+| USB headset **with microphone** | Jabra Evolve2 30 SE or similar |
+| Arduino Uno | USB cable to the Pi |
+| HC-SR04 ultrasonic | 4 wires to the Arduino |
 | 32 GB SD card | class 10 |
+
+That is the whole build. No GPS, no accelerometer, no motor.
 
 ---
 
 ## 2. Flash the Arduino
 
 1. Open `arduino/smartcane_sensor_hub/smartcane_sensor_hub.ino` in the Arduino IDE.
-2. Install libraries: **Wire** (built in), **SoftwareSerial** (built in).
-3. Check the pin defines at the top against your actual wiring.
-4. Upload to the Uno.
+2. **No libraries to install** — it uses only what ships with the IDE.
+3. Upload to the Uno.
 
-**Wiring used by the sketch:**
+**Wiring — 4 wires, nothing else:**
 
-| Sensor | Arduino pin |
+| HC-SR04 | Arduino pin |
 |---|---|
-| HC-SR04 TRIG | D7 |
-| HC-SR04 ECHO | D8 |
-| MPU6050 SDA | A4 |
-| MPU6050 SCL | A5 |
-| GPS TX → Arduino RX | D3 |
-| GPS RX ← Arduino TX | D2 |
-| Vibration motor gate | D9 (via transistor + flyback diode) |
-| Status LED | D13 |
+| VCC | 5V |
+| GND | GND |
+| TRIG | D7 |
+| ECHO | D8 |
 
-> ⚠️ Never drive the motor directly from a pin. Use a transistor, a flyback
-> diode across the motor, and a separate supply if the motor is bigger than a
-> coin cell.
+D13 is the Uno's own onboard LED. It lights whenever something is closer than
+60 cm — no wiring needed, and it is the quickest way to see the sensor working.
 
 ---
 

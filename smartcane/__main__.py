@@ -161,7 +161,7 @@ class SmartCane:
         if sensor is not None and sensor.gps_fix and sensor.gps_lat is not None:
             return (f"Location: latitude {sensor.gps_lat:.5f}, "
                     f"longitude {sensor.gps_lon:.5f}.")
-        return "No GPS fix yet. I cannot give your location."
+        return "Location is not available. No GPS module is connected."
 
     def _direction_text(self, cmd: intent.Intent, scene) -> str:
         if cmd is intent.Intent.LEFT:
