@@ -93,6 +93,15 @@ speaker-test -t sine -f 440 -l 1     # do you hear a tone?
 arecord -f cd -d 3 /tmp/t.wav && aplay /tmp/t.wav    # do you hear yourself?
 ```
 
+Then let the software check the microphone for you:
+
+```bash
+python -m smartcane --test-mic
+```
+
+It records 4 seconds, prints a peak level, and says `MIC OK`, `MIC VERY
+QUIET` or `MIC DEAD`. Use it before blaming the recogniser.
+
 > The Pi 4 3.5 mm jack is a **combo** jack: it takes TRRS headsets (mic + stereo
 > out). If `arecord -l` shows no capture device, your headset is TRS (no mic) and
 > you need a USB sound card.

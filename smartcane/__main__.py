@@ -14,7 +14,7 @@ from .audio_out import AudioOut
 from .camera import Camera
 from .guidance import Guidance, Priority, State
 from .link import SerialLink
-from .util import get_logger, setup_logging
+from .util import get_logger, resolve_audio_device, setup_logging
 from .vision import Vision
 
 log = get_logger("main")
@@ -235,6 +235,65 @@ class SmartCane:
         self._started = time.monotonic()
 
 
+def _test_mic(device, seconds: float = 4.0) -> int:
+    """Record a few seconds and report whether the microphone actually hears.
+
+    This exists because "the mic does not work" is almost never one problem:
+    it can be a missing capture device, a muted input, or a plug with no mic
+    pin at all. Printing a level tells them apart in one run.
+    """
+    try:
+        import numpy as np
+        import sounddevice as sd
+    except Exception as exc:                            # noqa: BLE001
+        print(f"cannot load audio libraries: {exc}")
+        return 1
+
+    try:
+        resolved = resolve_audio_device(device, "in")
+    except Exception:                                   # noqa: BLE001
+        resolved = None
+
+    try:
+        info = sd.query_devices(resolved, "input")
+    except Exception as exc:                            # noqa: BLE001
+        print(f"\nNO CAPTURE DEVICE AVAILABLE: {exc}")
+        print("\nOn a Raspberry Pi this usually means the headset is plugged")
+        print("into the 3.5mm jack, which is OUTPUT ONLY unless you have a")
+        print("TRRS headset with a mic pin. A normal IEM/earphone cable is TRS")
+        print("and carries no microphone.")
+        print("\nUse a USB headset, or a USB sound card with a mic input.")
+        print("Check what the system sees with:  arecord -l")
+        return 1
+
+    print(f"\nRecording {seconds:.0f}s from: {info['name']}")
+    print(">>> SPEAK NOW: count out loud, one two three four <<<\n")
+    try:
+        rec = sd.rec(int(seconds * 16000), samplerate=16000, channels=1,
+                     dtype="int16", device=resolved)
+        sd.wait()
+    except Exception as exc:                            # noqa: BLE001
+        print(f"recording failed: {exc}")
+        return 1
+
+    data = rec.astype("float32")
+    peak = float(np.max(np.abs(data))) if data.size else 0.0
+    rms = float(np.sqrt(np.mean(data ** 2))) if data.size else 0.0
+    print(f"peak = {peak:8.0f}    rms = {rms:8.1f}")
+
+    if peak < 50:
+        print("\nRESULT: MIC DEAD - no signal at all.")
+        print("  The device opened but heard nothing. Wrong input device, or")
+        print("  a plug with no mic pin.")
+        return 1
+    if peak < 300:
+        print("\nRESULT: MIC VERY QUIET - something is connected but barely.")
+        print("  Raise the gain:  alsamixer  (F4 for capture, up arrow)")
+        return 1
+    print("\nRESULT: MIC OK - it heard you. Voice input will work.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="smartcane",
                                 description="Sahayak Drishti smart cane")
@@ -249,6 +308,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print raw Arduino bytes (use this first when wiring)")
     p.add_argument("--list-audio", action="store_true",
                    help="list audio devices and exit (pick the Jabra/headset)")
+    p.add_argument("--test-mic", action="store_true",
+                   help="record a few seconds and report whether the mic hears")
+    p.add_argument("--mic", default=config.AUDIO_INPUT_DEVICE,
+                   help="input device index or name (for --test-mic too)")
     p.add_argument("--verbose", action="store_true", help="log state twice a second")
     p.add_argument("--duration", type=float, default=0.0,
                    help="stop after N seconds (0 = run forever)")
@@ -263,16 +326,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_audio:
         try:
             import sounddevice as sd
-            print(sd.query_devices())
-            print("\nDefault input :", sd.default.device[0])
-            print("Default output:", sd.default.device[1])
+            devices = sd.query_devices()
+            print(devices)
+            ins = [i for i, d in enumerate(devices) if d["max_input_channels"] > 0]
+            outs = [i for i, d in enumerate(devices) if d["max_output_channels"] > 0]
+            print(f"\ncapture devices: {len(ins)}   playback devices: {len(outs)}")
+            if ins:
+                for i in ins:
+                    print(f"  [{i}] IN  {devices[i]['name']}")
+            else:
+                print("  NONE - there is no microphone available.")
+                print("  The Pi 3.5mm jack is OUTPUT ONLY on most setups. A TRS")
+                print("  headset plug has no mic pin. Use a USB headset or a")
+                print("  USB sound card with a separate mic input.")
+            print(f"\nDefault input : {sd.default.device[0]}")
+            print(f"Default output: {sd.default.device[1]}")
             print("\nTo pin a device, export before running:")
-            print("  SMARTCANE_MIC=Jabra   SMARTCANE_SPEAKER=Jabra")
+            print("  SMARTCANE_MIC=<index>  SMARTCANE_SPEAKER=<index>")
         except Exception as exc:                        # noqa: BLE001
             log.error("cannot query audio devices: %s", exc)
             log.error("on the Pi this usually means: "
                       "sudo apt install -y libportaudio2")
         return 0
+
+    if args.test_mic:
+        return _test_mic(args.mic, args.duration or 4.0)
 
     if args.dump_serial:
         link = SerialLink(mock=args.mock, dump=True)
