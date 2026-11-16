@@ -79,32 +79,63 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def resolve_audio_device(device, kind: str):
-    """Validate a configured audio device against what PortAudio exposes.
+    """Pick an audio device, and never leave the system with no audio at all.
 
     `SMARTCANE_MIC=Jabra` is convenient until the headset is unplugged or the
     name differs slightly -- then the old code raised "No input device matching"
-    and disabled the microphone entirely, which looks like a broken build on
-    stage. Fall back to the system default instead and say so in the log.
+    and disabled the microphone entirely, which looks like a broken build.
+
+    The important case is a USB headset that is plugged in but is NOT the
+    system default. ALSA's default input is often -1 (no default), so
+    sounddevice refuses to open anything even though a perfectly good
+    microphone exists. In that case we scan for the first device that actually
+    has capture channels and use it.
 
     kind: "in" or "out"
     """
-    if device is None:
-        return None
+    log = get_logger("audio")
     try:
         import sounddevice as sd
+    except Exception:                                   # noqa: BLE001
+        return device
+
+    def usable(info, direction):
+        return (info["max_input_channels"] > 0 if direction == "in"
+                else info["max_output_channels"] > 0)
+
+    try:
+        devices = sd.query_devices()
+    except Exception:                                   # noqa: BLE001
+        return device
+
+    # 1. explicit device requested
+    if device is not None:
         if isinstance(device, int):
             return device
         want = str(device).lower()
-        for index, info in enumerate(sd.query_devices()):
-            if kind == "in" and info["max_input_channels"] <= 0:
-                continue
-            if kind == "out" and info["max_output_channels"] <= 0:
-                continue
-            if want in str(info["name"]).lower():
+        for index, info in enumerate(devices):
+            if usable(info, kind) and want in str(info["name"]).lower():
                 return index
-        get_logger("audio").warning(
-            "no %s device matching %r - using the system default instead",
-            "input" if kind == "in" else "output", device)
-        return None
+        log.warning("no %s device matching %r - auto-selecting instead",
+                    "input" if kind == "in" else "output", device)
+
+    # 2. is the system default usable?
+    try:
+        default = sd.default.device[0 if kind == "in" else 1]
+        if default is not None and default >= 0:
+            if usable(devices[default], kind):
+                return None                             # default is fine
     except Exception:                                   # noqa: BLE001
-        return device
+        pass
+
+    # 3. fall back to the first device that can actually do the job
+    for index, info in enumerate(devices):
+        if usable(info, kind):
+            log.warning("system default %s was unusable - using device %d: %s",
+                        "input" if kind == "in" else "output", index,
+                        info["name"])
+            return index
+
+    log.error("no %s device exists on this system",
+              "capture" if kind == "in" else "playback")
+    return None

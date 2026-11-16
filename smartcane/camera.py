@@ -13,6 +13,8 @@ remote-debugging session starts from a known state instead of a guess.
 """
 from __future__ import annotations
 
+import concurrent.futures
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -23,6 +25,47 @@ from . import config
 from .util import StoppableThread, get_logger
 
 log = get_logger("camera")
+
+
+def discover_ip_webcams(port: int = config.CAMERA_SCAN_PORT,
+                        timeout: float = config.CAMERA_SCAN_TIMEOUT
+                        ) -> list[str]:
+    """Find phones running an IP-webcam server on the local network.
+
+    The phone's address comes from DHCP, so it changes after a reboot and the
+    old URL silently stops working. Rather than make the user hunt for it in
+    the app, scan the /24 we are on for anything listening on the webcam port.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))          # no packets are actually sent
+        local_ip = sock.getsockname()[0]
+        sock.close()
+    except Exception as exc:                            # noqa: BLE001
+        log.warning("cannot determine local IP for camera scan: %s", exc)
+        return []
+
+    if local_ip.startswith("127."):
+        return []
+
+    prefix = local_ip.rsplit(".", 1)[0]
+    hosts = [f"{prefix}.{i}" for i in range(1, 255)]
+
+    def probe(host: str) -> str | None:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return host
+        except Exception:                               # noqa: BLE001
+            return None
+
+    found: list[str] = []
+    log.info("scanning %s.0/24 for a camera on port %d ...", prefix, port)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
+        for host in pool.map(probe, hosts):
+            if host:
+                found.append(f"http://{host}:{port}/video")
+    log.info("camera scan found %d candidate(s)", len(found))
+    return found
 
 try:
     import cv2
@@ -98,25 +141,62 @@ class Camera:
         return None if frame is None else frame.image
 
     # -- backends ----------------------------------------------------------
+    def _remember(self, url: str) -> None:
+        try:
+            config.CAMERA_CACHE.write_text(url.strip() + "\n", encoding="utf-8")
+        except Exception:                               # noqa: BLE001
+            pass
+
+    def _load_cached(self) -> str | None:
+        try:
+            url = config.CAMERA_CACHE.read_text(encoding="utf-8").strip()
+            return url or None
+        except Exception:                               # noqa: BLE001
+            return None
+
     def _open_real(self) -> bool:
         if not _HAVE_CV2:
             log.error("opencv not installed: pip install opencv-python-headless")
             return False
 
         source = self.source
-        if source == "auto":
-            # try picamera2 first on a Pi: it is the supported Bookworm path
-            if self._try_picamera2():
-                return True
-            for idx in (0, 1, 2):
-                if self._try_cv2(idx):
-                    return True
-            return False
+
         if source == "picamera2":
             return self._try_picamera2()
         if source.isdigit():
             return self._try_cv2(int(source))
-        return self._try_cv2(source)
+
+        if source not in ("auto", "scan"):
+            # an explicit URL or device path was given
+            if self._try_cv2(source):
+                self._remember(source)
+                return True
+            log.warning("camera %s did not open - falling back to discovery",
+                        source)
+
+        if source != "scan":
+            # 1. the CSI camera, if this Pi has one
+            if self._try_picamera2():
+                return True
+            # 2. a USB webcam
+            for idx in (0, 1, 2):
+                if self._try_cv2(idx):
+                    return True
+
+        # 3. the phone webcam we used last time (its IP may have changed)
+        cached = self._load_cached()
+        if cached and self._try_cv2(cached):
+            log.info("using remembered camera URL %s", cached)
+            return True
+
+        # 4. scan the local network for a webcam server
+        for url in discover_ip_webcams():
+            if self._try_cv2(url):
+                self._remember(url)
+                log.info("discovered camera at %s", url)
+                return True
+
+        return False
 
     def _try_cv2(self, source) -> bool:
         try:

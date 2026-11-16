@@ -94,7 +94,12 @@ class Guidance:
         self.step_len = step_len
         self._state = State.CLEAR
         self._last_key = ""
-        self._last_spoken_at = 0.0
+        # Hazards and the "path clear" reassurance are timed separately. Sharing
+        # one timer meant that right after saying "Path clear", a person
+        # stepping out in front of the user was silently suppressed for the
+        # whole advisory cooldown.
+        self._last_hazard_at = 0.0
+        self._last_clear_at = 0.0
         self._clear_since: float | None = None
         self._clear_announced = False
 
@@ -159,11 +164,13 @@ class Guidance:
                 self._clear_since = now
                 self._clear_announced = False
             self._state = sit.state
-            # Only reassure once, and only after a quiet period.
+            # Reassure once, and only after a genuinely quiet period, so a
+            # hazard that just cleared is not immediately overwritten.
             if (self._clear_since is not None and not self._clear_announced
-                    and now - self._clear_since >= config.SPEAK_CLEAR_AFTER_SEC):
+                    and now - self._clear_since >= config.SPEAK_CLEAR_AFTER_SEC
+                    and now - self._last_hazard_at >= config.SPEAK_CLEAR_AFTER_SEC):
                 self._clear_announced = True
-                self._last_spoken_at = now
+                self._last_clear_at = now
                 return Announcement("Path clear. You can walk.",
                                     Priority.INFO, key="clear")
             return None
@@ -175,9 +182,9 @@ class Guidance:
         # ADVISORY chatter is rate-limited; URGENT and STOP may interrupt,
         # with a much shorter guard so they cannot machine-gun the speaker.
         if sit.state in (State.STOP, State.URGENT):
-            cooled = (now - self._last_spoken_at) >= config.URGENT_MIN_GAP_SEC
+            cooled = (now - self._last_hazard_at) >= config.URGENT_MIN_GAP_SEC
         else:
-            cooled = (now - self._last_spoken_at) >= config.ANNOUNCE_COOLDOWN_SEC
+            cooled = (now - self._last_hazard_at) >= config.ANNOUNCE_COOLDOWN_SEC
 
         if not changed or not cooled:
             self._state = sit.state
@@ -186,7 +193,7 @@ class Guidance:
 
         self._state = sit.state
         self._last_key = key
-        self._last_spoken_at = now
+        self._last_hazard_at = now
         self._clear_since = None
 
         return self._phrase(sit)
@@ -205,28 +212,29 @@ class Guidance:
 
         if sit.state == State.URGENT:
             if sit.zone == "center":
-                text = f"{label} very close ahead. Stop."
+                text = f"{label} right in front of you. Stop."
             else:
-                text = f"{label} very close on your {sit.zone}."
+                text = f"Careful, {label.lower()} very close on your {sit.zone}."
             return Announcement(text, Priority.URGENT,
                                 earcon="urgent", key="urgent")
 
-        # ADVISORY: give a step count when the corridor is clear enough to walk,
-        # otherwise give a steering direction.
+        # ADVISORY: a step count when there is room to walk, otherwise a steer.
         if sit.zone == "center":
             if steps >= 1:
-                text = (f"{label} ahead, {approx}. Walk straight {steps} "
+                text = (f"{label} ahead, {approx}. "
+                        f"Walk straight {_num(steps)} "
                         f"{'step' if steps == 1 else 'steps'}.")
             else:
-                text = f"{label} ahead, {approx}. Move right."
+                text = f"{label} ahead, {approx}. Step to your right."
         else:
             steer = "right" if sit.zone == "left" else "left"
-            text = f"{label} on your {sit.zone}, {approx}. Move {steer}."
+            text = (f"{label} on your {sit.zone}, {approx}. "
+                    f"Step to your {steer}.")
 
         if sit.movement == "toward":
-            text += " It is moving toward you."
+            text += " It's coming toward you."
         elif sit.movement in ("left_to_right", "right_to_left"):
-            text += " It is crossing your path."
+            text += " It's crossing in front of you."
 
         return Announcement(text, Priority.ADVISORY, key="advisory")
 
@@ -262,9 +270,27 @@ def _nice(label: str) -> str:
 
 
 def _approx_distance(dist_m: float) -> str:
-    """Distance wording, always fed a value that has already been rounded."""
+    """Distance in words.
+
+    Spoken numbers sound stilted ("about 1.5 metres"), so small distances use
+    the phrasing a person would actually use. Everything is fed a value that
+    has already been rounded to the nearest half metre.
+    """
     if dist_m <= 0.5:
         return "very close"
     if dist_m <= 1.0:
-        return "about 1 metre"
+        return "about a metre"
+    if dist_m <= 1.5:
+        return "about a metre and a half"
+    if dist_m <= 2.0:
+        return "about two metres"
+    if dist_m <= 2.5:
+        return "about two and a half metres"
+    if dist_m <= 3.0:
+        return "about three metres"
     return f"about {dist_m:g} metres"
+
+
+def _num(n: int) -> str:
+    """Small counts as words, because 'walk 2 steps' sounds like a machine."""
+    return {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}.get(n, str(n))

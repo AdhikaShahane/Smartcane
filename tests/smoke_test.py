@@ -231,6 +231,74 @@ def test_serial_parsers() -> None:
     check("json parsed", link4.state().dist_cm == 88.0, str(link4.state().dist_cm))
 
 
+def test_phrasing() -> None:
+    """What the cane actually says out loud.
+
+    These strings are the product. They must be short, natural and never
+    contradictory ("about 2 metres, walk 1 step" was a real bug).
+    """
+    print("spoken phrasing")
+    g = Guidance(step_len=0.65)
+    t = 1000.0
+    said: list[str] = []
+    for dist in (2.2, 1.5, 1.0, 0.7, 0.3):
+        t += 5.0
+        sit = g.assess(FakeSensor(dist), None)
+        ann = g.announce(sit, now=t)
+        if ann:
+            said.append(ann.text)
+
+    for line in said:
+        print(f"    \"{line}\"")
+
+    check("something was said", bool(said), f"{len(said)} lines")
+    check("stop is short and blunt",
+          any(s.strip() == "Stop." for s in said))
+    check("no digits spelled as numerals in step counts",
+          not any("straight 1 step" in s or "straight 2 step" in s for s in said))
+    check("distance uses words not '1 metre'",
+          not any("about 1 metre" in s for s in said))
+    check("mentions a direction or action",
+          any(("Step to your" in s) or ("Walk straight" in s) or
+              ("Stop." in s) for s in said))
+
+    # steps and distance must agree (regression: this was broken once)
+    g2 = Guidance(step_len=0.65)
+    sit = g2.assess(FakeSensor(1.5), None)
+    ann = g2.announce(sit, now=2000.0)
+    if ann and "Walk straight" in ann.text:
+        check("1.5 m says one step", "straight one step" in ann.text, ann.text)
+
+
+def test_cooldown_isolation() -> None:
+    """A hazard right after 'Path clear' must still be announced.
+
+    Regression: hazards and the reassurance shared one timestamp, so after
+    saying "Path clear" a person stepping into the path was silently
+    suppressed for the whole advisory cooldown.
+    """
+    print("cooldown isolation")
+    g = Guidance(step_len=0.65)
+    t = 5000.0
+    events: list[tuple[float, str]] = []
+
+    # obstacle -> long clear (triggers "Path clear") -> obstacle again
+    for dist in (1.5, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 1.2):
+        t += 1.0
+        ann = g.announce(g.assess(FakeSensor(dist), None), now=t)
+        if ann:
+            events.append((dist, ann.text))
+
+    said_clear = any("Path clear" in text for _, text in events)
+    hazard_after = any(d < 2.0 and "Path clear" not in text
+                       for d, text in events if d == 1.2)
+
+    check("said 'Path clear' during the quiet stretch", said_clear,
+          f"{len(events)} utterances")
+    check("hazard after clear was still announced", hazard_after,
+          str([text for d, text in events if d == 1.2]))
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -239,6 +307,8 @@ def main() -> int:
     test_no_false_triggers()
     test_steps()
     test_state_machine()
+    test_cooldown_isolation()
+    test_phrasing()
     test_earcons()
     test_serial_parsers()
     print("=" * 60)

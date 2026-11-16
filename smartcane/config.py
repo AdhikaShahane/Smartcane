@@ -31,6 +31,11 @@ CAM_WIDTH = 640
 CAM_HEIGHT = 480
 CAM_FPS = 30
 CAM_STALE_SEC = 1.0
+# The phone's IP changes on DHCP after every reboot, so remember the last URL
+# that worked and re-discover it automatically when it stops responding.
+CAMERA_CACHE = Path.home() / ".smartcane_camera"
+CAMERA_SCAN_PORT = 8080
+CAMERA_SCAN_TIMEOUT = 0.25
 
 # ============================================================================
 # VISION
@@ -111,6 +116,12 @@ PREROLL_SEC = 0.60        # ring buffer kept before VAD fires (never clip a word
 VAD_FRAME = 512           # samples @16 kHz = 32 ms (Silero)
 VAD_END_SILENCE = 0.35    # trailing silence that ends an utterance
 TTS_VOLUME = 0.70         # capped: loud TTS leaks into the inline mic
+
+# espeak fallback voice. Defaults are shrill; a female variant at a lower
+# pitch and slower rate is much easier to listen to for long periods.
+ESPEAK_VOICE = os.getenv("SMARTCANE_ESPEAK_VOICE", "en-us+f3")
+ESPEAK_RATE = int(os.getenv("SMARTCANE_ESPEAK_RATE", "150"))
+ESPEAK_PITCH = int(os.getenv("SMARTCANE_ESPEAK_PITCH", "45"))
 
 
 def _audio_device(env_name: str):

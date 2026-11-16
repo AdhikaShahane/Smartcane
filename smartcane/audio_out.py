@@ -121,39 +121,62 @@ class TtsEngine:
         self.rate = config.AUDIO_RATE
         self._piper_model = None
         self._piper_bin = None
+        self._espeak = None
+        self._cache: dict[str, tuple[np.ndarray, int]] = {}
+        self._cache_order: list[str] = []
         self._detect()
 
     def _detect(self) -> None:
         piper = shutil.which("piper") or shutil.which("piper-tts")
         if piper:
             for name in ("en_US-lessac-medium.onnx", "en_US-glados.onnx",
-                         "en_US-amy-medium.onnx"):
+                         "en_US-amy-medium.onnx", "en_US-lessac-low.onnx"):
                 candidate = config.MODEL_DIR / name
                 if candidate.exists():
                     self._piper_bin = piper
                     self._piper_model = candidate
                     self.backend = "piper"
                     self.rate = 22050
-                    log.info("TTS: piper (%s)", name)
+                    log.info("TTS: piper (%s) - natural voice", name)
                     return
-            log.info("piper found but no voice model in %s", config.MODEL_DIR)
+            log.info("piper found but no voice model in %s "
+                     "(run: bash tools/install_piper.sh)", config.MODEL_DIR)
 
         espeak = shutil.which("espeak-ng") or shutil.which("espeak")
         if espeak:
             self._espeak = espeak
             self.backend = "espeak"
             self.rate = 22050
-            log.info("TTS: %s", espeak)
+            log.info("TTS: %s (robotic - run tools/install_piper.sh for a "
+                     "natural voice)", espeak)
             return
 
         log.warning("no TTS binary found - speaking to the console only")
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int] | None:
+        """Synthesize, with a cache.
+
+        A blind user hears the same dozen phrases constantly ("Stop.", "Path
+        clear."). Caching them makes a repeat instant instead of paying the
+        full synthesis cost every time.
+        """
+        key = text.strip().lower()
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+
+        result = None
         if self.backend == "piper":
-            return self._synth_piper(text)
-        if self.backend == "espeak":
-            return self._synth_espeak(text)
-        return None
+            result = self._synth_piper(text)
+        elif self.backend == "espeak":
+            result = self._synth_espeak(text)
+
+        if result is not None:
+            self._cache[key] = result
+            self._cache_order.append(key)
+            while len(self._cache_order) > 40:
+                self._cache.pop(self._cache_order.pop(0), None)
+        return result
 
     def _synth_piper(self, text: str):
         try:
@@ -171,23 +194,32 @@ class TtsEngine:
             return None
 
     def _synth_espeak(self, text: str):
-        try:
-            proc = subprocess.run(
-                [self._espeak, "-v", "en", "-s", "155", "--stdout", text],
-                capture_output=True, timeout=20)
-            if proc.returncode != 0 or not proc.stdout:
-                return None
-            with wave.open(io.BytesIO(proc.stdout), "rb") as wf:
-                rate = wf.getframerate()
-                frames = wf.readframes(wf.getnframes())
-                ch = wf.getnchannels()
-            pcm = np.frombuffer(frames, dtype=np.int16)
-            if ch > 1:
-                pcm = pcm.reshape(-1, ch).mean(axis=1).astype(np.int16)
-            return pcm, rate
-        except Exception as exc:                        # noqa: BLE001
-            log.warning("espeak error: %s", exc)
-            return None
+        # espeak defaults are shrill and machine-like. A female variant at a
+        # lower pitch and a slightly slower rate is markedly easier to listen
+        # to. This is still the fallback; piper is the real fix.
+        variants = [config.ESPEAK_VOICE, "en-us"]
+        for voice in variants:
+            try:
+                proc = subprocess.run(
+                    [self._espeak, "-v", voice,
+                     "-s", str(config.ESPEAK_RATE),
+                     "-p", str(config.ESPEAK_PITCH),
+                     "-g", "4", "--stdout", text],
+                    capture_output=True, timeout=20)
+                if proc.returncode != 0 or not proc.stdout:
+                    continue
+                with wave.open(io.BytesIO(proc.stdout), "rb") as wf:
+                    rate = wf.getframerate()
+                    frames = wf.readframes(wf.getnframes())
+                    ch = wf.getnchannels()
+                pcm = np.frombuffer(frames, dtype=np.int16)
+                if ch > 1:
+                    pcm = pcm.reshape(-1, ch).mean(axis=1).astype(np.int16)
+                return pcm, rate
+            except Exception as exc:                    # noqa: BLE001
+                log.debug("espeak voice %r failed: %s", voice, exc)
+        log.warning("espeak could not synthesize: %r", text[:40])
+        return None
 
 
 # ---------------------------------------------------------------------------
