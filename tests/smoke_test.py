@@ -170,6 +170,52 @@ def test_earcons() -> None:
               f"{pcm.shape[0]} samples")
 
 
+def test_serial_parsers() -> None:
+    """The Pi must read whatever the Arduino happens to be sending.
+
+    The real Grove sketch prints a banner first and then text lines, so format
+    detection has to survive the banner. These cases come from actual output
+    captured off the board.
+    """
+    print("serial parsers")
+    from smartcane.link import SerialLink
+
+    def crc8(b: bytes) -> int:
+        c = 0
+        for x in b:
+            c ^= x
+            for _ in range(8):
+                c = ((c << 1) ^ 0x07) & 0xFF if c & 0x80 else (c << 1) & 0xFF
+        return c
+
+    # 1. the friend's text sketch: banner then "Distance: 150.0 cm | PATH CLEAR"
+    link = SerialLink(mock=False)
+    link.feed(b"================================\r\n")
+    link.feed(b" Grove Ultrasonic Ranger V2.0\r\n")
+    link.feed(b"Distance: 150.0 cm  | PATH CLEAR\r\n")
+    check("text banner detected as kv", link._format == "kv", str(link._format))
+    check("Distance: 150.0 parsed", link.state().dist_cm == 150.0,
+          str(link.state().dist_cm))
+
+    # 2. our binary protocol
+    link2 = SerialLink(mock=False)
+    body = bytes([0xAA, 0x55, 0x01, 0x04, 7, 0x2C, 0x01, 0x00])
+    link2.feed(body + bytes([crc8(body)]))
+    st = link2.state()
+    check("binary frame detected", link2._format == "binary", str(link2._format))
+    check("binary dist 300cm", st.dist_cm == 300.0, str(st.dist_cm))
+
+    # 3. plain CSV
+    link3 = SerialLink(mock=False)
+    link3.feed(b"123,45\n")
+    check("csv parsed", link3.state().dist_cm == 123.0, str(link3.state().dist_cm))
+
+    # 4. JSON
+    link4 = SerialLink(mock=False)
+    link4.feed(b'{"d":88,"m":1}\n')
+    check("json parsed", link4.state().dist_cm == 88.0, str(link4.state().dist_cm))
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -179,6 +225,7 @@ def main() -> int:
     test_steps()
     test_state_machine()
     test_earcons()
+    test_serial_parsers()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")

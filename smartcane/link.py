@@ -32,6 +32,12 @@ FRAME_HEADER = b"\xaa\x55"
 TYPE_FAST = 0x01
 TYPE_SLOW = 0x02
 
+# A line that carries a number, used to identify the wire format. Banners and
+# headers must not match these.
+_KV_LINE = re.compile(rb"[A-Za-z_][A-Za-z_0-9]*\s*[:=]\s*-?\d")
+_CSV_LINE = re.compile(rb"^\s*-?\d+(\.\d+)?\s*[,;]")
+_BARE_NUMBER = re.compile(rb"^\s*-?\d+(\.\d+)?\s*$")
+
 
 def _crc8(data: bytes) -> int:
     crc = 0
@@ -150,14 +156,26 @@ class SerialLink:
             self._state.frames += 1
 
     def _detect_format(self, chunk: bytes) -> str:
+        """Identify the wire format from buffered data.
+
+        Many sketches print a banner first ("====...", "Grove Ultrasonic
+        Ranger V2.0") and only then real data. Deciding on the first bytes
+        would lock onto the banner and misread every later line, so we scan
+        line by line and commit only when a line actually looks like data.
+        """
         if chunk.startswith(FRAME_HEADER):
             return "binary"
-        stripped = chunk.lstrip()
-        if stripped.startswith(b"{"):
-            return "json"
-        if b":" in stripped[:32]:
-            return "kv"
-        return "csv"
+        for raw in chunk.split(b"\n"):
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(b"{"):
+                return "json"
+            if _KV_LINE.search(line):
+                return "kv"
+            if _CSV_LINE.match(line) or _BARE_NUMBER.match(line):
+                return "csv"
+        return ""
 
     def feed(self, chunk: bytes) -> None:
         """Parse whatever bytes arrived. Safe to call with partial frames."""
@@ -168,7 +186,21 @@ class SerialLink:
         self._buf.extend(chunk)
 
         if self._format is None:
-            self._format = self._detect_format(bytes(self._buf))
+            buf = bytes(self._buf)
+            if buf.startswith(FRAME_HEADER):
+                self._format = "binary"
+            else:
+                detected = self._detect_format(buf)
+                if not detected:
+                    if len(buf) > 8192:
+                        # give up waiting and assume csv so we at least try
+                        self._format = "csv"
+                        log.warning("could not identify serial format, "
+                                    "assuming csv")
+                    else:
+                        return                      # wait for a data line
+                else:
+                    self._format = detected
             log.info("serial format detected: %s", self._format)
 
         if self._format == "binary":
@@ -242,8 +274,16 @@ class SerialLink:
 
     def _apply_kv(self, text: str) -> None:
         vals = {k.lower(): float(v) for k, v in self._KV_RE.findall(text)}
+        if not vals:
+            return
+        dist = vals.get("distance")
+        if dist is None:
+            dist = vals.get("dist")
+        if dist is None:
+            dist = vals.get("d")
+        # A sketch that prints "Distance: 150.0 cm" is already in centimetres.
         self._publish(
-            dist_cm=vals.get("dist") or vals.get("d") or vals.get("distance"),
+            dist_cm=dist,
             motion=int(vals.get("mot", vals.get("m", 0))),
             gps_fix=int(vals.get("fix", 0)),
             gps_lat=vals.get("lat"), gps_lon=vals.get("lon"))
