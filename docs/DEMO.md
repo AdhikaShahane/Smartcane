@@ -1,0 +1,157 @@
+# Demo script
+
+Fifteen minutes of preparation, five minutes of demo, and a plan for when
+something does not cooperate.
+
+---
+
+## 1. Before you start (do this in order)
+
+```bash
+cd ~/Smartcane
+source ~/cane/bin/activate
+git pull
+bash tools/healthcheck.sh
+```
+
+Read the PASS/FAIL table. You want at least:
+
+| Line | Must say |
+|---|---|
+| unit tests | `[PASS]` |
+| audio devices | `[PASS] microphone device found` |
+| microphone | `[PASS] microphone hears you` |
+| Arduino | `[PASS] Arduino serial device present` |
+| camera | `[PASS]` |
+| speech output | `[PASS] natural voice (piper) installed` |
+
+Anything that FAILs prints its own fix on the next line. Fix what you can;
+note what you cannot and use the fallbacks below.
+
+**Then start the phone camera** (IP Webcam app → Start server) and confirm the
+Pi is on the same Wi-Fi.
+
+**Then run once to warm everything up** — the first run loads YOLO and Vosk,
+which takes about 12 seconds. Do this *before* the audience is watching:
+
+```bash
+python -m smartcane --camera scan --verbose
+```
+Wait for `ready - ... vision=on`, then `Ctrl+C`.
+
+---
+
+## 2. The demo, in order
+
+### Opening (say this)
+
+> "This is Sahayak Drishti, an AI smart cane for visually impaired users. The
+> Raspberry Pi is the brain — it sees with a camera, senses distance with an
+> ultrasonic sensor, and talks. The Arduino handles the ultrasonic because
+> timing-critical sensing belongs on a microcontroller, not on an operating
+> system."
+
+### Step 1 — obstacle detection (30 s)
+
+```bash
+python -m smartcane --verbose
+```
+
+Wave a hand in front of the ultrasonic sensor.
+
+> "It announces only when the situation changes, not continuously. Watch the
+> log: `state=watch` means it is tracking silently, `advisory` means it has
+> started guiding."
+
+Point at the log line `serial format detected: kv` — that is the Pi reading the
+Arduino.
+
+### Step 2 — object recognition (60 s)
+
+Hold a person, chair or bottle in front of the phone camera.
+
+> "YOLO runs on the Pi at 320 pixels — that is the sweet spot. At 640 it drops
+> to 3 frames per second; at 320 we get 8 to 12, which is what makes tracking
+> usable."
+
+Show the log line `>> Person ahead, about a metre and a half. Walk straight one step.`
+
+### Step 3 — voice commands (60 s)
+
+Say clearly: **"what is ahead"** … **"how many steps"** … **"stop"**.
+
+> "The vocabulary is deliberately restricted to about seventy phrases. That
+> turns speech recognition from 'transcribe English' into 'classify seventy
+> things', which is far more reliable and much faster on a Pi."
+
+If asked about false triggers:
+
+> "Bare direction words are rejected on purpose. 'left' on its own is a
+> preposition — you would trigger it in normal conversation. Only 'turn left'
+> or 'move left' count. There are seventeen automated tests for exactly this."
+
+### Step 4 — the numbers (30 s)
+
+> "The old version took 1.5 to 2.5 seconds to warn and 2.5 to 4 seconds to
+> answer, because inference ran on PyTorch at 640 pixels and speech went
+> through a cloud API. Now the ultrasonic-to-earcon path is about 60 ms, and a
+> spoken answer is 500 to 900 ms."
+
+---
+
+## 3. If something fails on the day
+
+| Symptom | Do this | Say this |
+|---|---|---|
+| **No microphone** | The system prints `Falling back to KEYBOARD commands`. Just type `what is ahead` and press Enter | "Voice input needs a USB microphone; the headset we have is output-only on the 3.5 mm jack. The command layer is identical — let me demonstrate by typing." |
+| **Camera not found** | `python -m smartcane --camera scan --verbose` | "It discovers the phone on the network automatically." |
+| **Detection slow** | Nothing to do live — mention it | "We are still on PyTorch weights; the ncnn export is a one-command optimisation that triples the frame rate." |
+| **Arduino not found** | `ls /dev/ttyACM*` — reseat the USB | "The ultrasonic is on a separate microcontroller; without it the camera still drives detection." |
+| **Everything fails** | `python -m smartcane --mock --verbose` | "This is the full pipeline against synthetic data — the same code path, no hardware." |
+| **Speech sounds robotic** | It is espeak — Piper did not install | "The neural voice needs a 60 MB model download; espeak is the offline fallback." |
+
+**`--mock` is your safety net.** It runs the entire state machine, guidance and
+speech with no hardware at all. It has never failed.
+
+---
+
+## 4. Questions they will ask
+
+**"How accurate is it?"**
+> "Detection is YOLOv8n, about 37 mAP on COCO, run at 320 pixels. What matters
+> more is that we do not rely on it for safety — the ultrasonic sensor is the
+> safety layer, and it does not need to know *what* the object is, only that
+> something is there."
+
+**"Why not just use a phone app?"**
+> "A phone needs a hand and gives no continuous feedback. This is hands-free,
+> head-mounted audio, and works with the cane the user already trusts."
+
+**"What happens if the Pi crashes?"**
+> "The Arduino keeps sensing independently and drives the onboard LED. The
+> architecture keeps the timing-critical path off the operating system."
+
+**"Is it safe to rely on?"**
+> "No, and we do not claim it is. It is a student prototype. The safety
+> decisions are conservative: if a reading is corrupt or out of range we
+> discard it rather than guess, and we never tell the user a path is clear
+> when the sensor is not responding."
+
+**"How fast is it really?"**
+> Show the log. Every line has a timestamp. `infer=280ms` is the honest number.
+
+---
+
+## 5. One-minute version
+
+If you get one minute:
+
+```bash
+python -m smartcane --mock --verbose
+```
+
+> "Obstacle detection, step-by-step guidance and speech, running the same code
+> that drives the hardware. The state machine moves clear → watch → advisory →
+> urgent → stop, and it only speaks when the state changes."
+
+That demonstrates the entire decision layer without touching a cable.

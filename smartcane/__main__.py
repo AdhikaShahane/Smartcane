@@ -35,6 +35,7 @@ class SmartCane:
                        mock=args.mock, device=args.mic)
         self._last_query_at = 0.0
         self._fault_warned = False
+        self._keyboard_mode = False
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -43,13 +44,41 @@ class SmartCane:
         self.link.start()
         self.camera.start()
         self.vision.start()
-        if not self.args.no_mic:
+
+        if self.args.keyboard:
+            self._use_keyboard("--keyboard requested")
+        elif not self.args.no_mic:
             self.asr.start()
+            if not self.asr.enabled:
+                # The microphone is the one part we cannot fake. Rather than
+                # run a demo with no way to give commands, fall back to the
+                # keyboard so the rest of the system can still be shown.
+                self._use_keyboard("no microphone available")
+
         self.audio.say(config.STARTUP_GREETING, Priority.INFO, earcon="ok")
-        log.info("ready - camera=%s serial=%s tts=%s vision=%s",
+        log.info("ready - camera=%s serial=%s tts=%s vision=%s input=%s",
                  self.camera.backend, self.link.state().source,
                  self.audio.tts.backend,
-                 "on" if self.vision.enabled else "off")
+                 "on" if self.vision.enabled else "off",
+                 "keyboard" if self._keyboard_mode else "microphone")
+
+    def _use_keyboard(self, reason: str) -> None:
+        log.warning("=" * 62)
+        log.warning("INPUT: %s", reason)
+        log.warning("Falling back to KEYBOARD commands.")
+        log.warning("Type a command and press Enter, for example:")
+        log.warning("    what is ahead      how many steps")
+        log.warning("    turn left          stop")
+        log.warning("=" * 62)
+        try:
+            self.asr.stop()
+        except Exception:                               # noqa: BLE001
+            pass
+        self._keyboard_mode = True
+        self.asr = Asr(on_event=self.on_speech,
+                       on_speech_start=self.on_speech_start,
+                       mock=True, device=self.args.mic)
+        self.asr.start()
 
     def stop(self) -> None:
         self.running = False
@@ -316,6 +345,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="no hardware: synthetic camera/sensor, type commands")
     p.add_argument("--no-camera", action="store_true", help="skip the camera")
     p.add_argument("--no-mic", action="store_true", help="skip speech input")
+    p.add_argument("--keyboard", action="store_true",
+                   help="type commands instead of speaking them "
+                        "(use this if the microphone will not work)")
     p.add_argument("--mute", action="store_true", help="print instead of speak")
     p.add_argument("--camera", default=config.CAMERA_SOURCE,
                    help="auto | 0 | picamera2 | http://phone:8080/video")
