@@ -1,6 +1,23 @@
 # Deploying Sahayak Drishti on the Raspberry Pi 4
 
-Everything here is ordered so that **each step can fail on its own and you know
+## Start here: one command that checks everything
+
+```bash
+cd ~/Smartcane && git pull
+source ~/cane/bin/activate
+bash tools/healthcheck.sh
+```
+
+It tests all eight layers — code version, unit tests, audio devices, mic
+signal, Arduino link, camera, speech engine, detector — and prints `PASS` or
+`FAIL` for each with the fix for anything that failed. **Send the output of
+this one command** and the whole state of the system is known.
+
+Skip the 4-second recording with `bash tools/healthcheck.sh --no-mic-test`.
+
+---
+
+Everything below is ordered so that **each step can fail on its own and you know
 immediately which part is broken.** Do not skip to the end — steps 6 and 7 exist
 to prove the sensors and the audio work before you try the full system.
 
