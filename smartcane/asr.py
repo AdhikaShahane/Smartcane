@@ -95,11 +95,12 @@ class SileroVad:
 
 
 class Asr:
-    def __init__(self, on_event, on_speech_start=None, mock: bool = False
-                 ) -> None:
+    def __init__(self, on_event, on_speech_start=None, mock: bool = False,
+                 device=None) -> None:
         self.on_event = on_event
         self.on_speech_start = on_speech_start
         self.mock = mock
+        self.device = device if device is not None else config.AUDIO_INPUT_DEVICE
         self.enabled = False
         self._rec = None
         self._model = None
@@ -137,7 +138,10 @@ class Asr:
         self._rec = KaldiRecognizer(self._model, config.MIC_RATE, grammar)
         self._rec.SetWords(False)
         self._vad = self._make_vad()
-        self._device = resolve_audio_device(config.AUDIO_INPUT_DEVICE, "in")
+        self._device = resolve_audio_device(self.device, "in")
+        log.info("microphone: device=%s (%s)",
+                 self._device if self._device is not None else "system default",
+                 config.MIC_RATE)
 
         try:
             self._stream = sd.RawInputStream(

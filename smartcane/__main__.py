@@ -29,10 +29,10 @@ class SmartCane:
         self.camera = Camera(source=args.camera,
                              mock=args.mock or args.no_camera)
         self.vision = Vision(self.camera, mock=args.no_camera)
-        self.audio = AudioOut(mute=args.mute)
+        self.audio = AudioOut(mute=args.mute, device=args.speaker)
         self.asr = Asr(on_event=self.on_speech,
                        on_speech_start=self.on_speech_start,
-                       mock=args.mock)
+                       mock=args.mock, device=args.mic)
         self._last_query_at = 0.0
         self._fault_warned = False
 
@@ -312,6 +312,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="record a few seconds and report whether the mic hears")
     p.add_argument("--mic", default=config.AUDIO_INPUT_DEVICE,
                    help="input device index or name (for --test-mic too)")
+    p.add_argument("--speaker", default=config.AUDIO_OUTPUT_DEVICE,
+                   help="output device index or name")
     p.add_argument("--verbose", action="store_true", help="log state twice a second")
     p.add_argument("--duration", type=float, default=0.0,
                    help="stop after N seconds (0 = run forever)")

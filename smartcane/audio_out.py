@@ -294,7 +294,7 @@ class _Item:
 
 class AudioOut:
     def __init__(self, volume: float = config.TTS_VOLUME,
-                 mute: bool = False) -> None:
+                 mute: bool = False, device=None) -> None:
         self.volume = volume
         self.mute = mute
         self._q: queue.PriorityQueue = queue.PriorityQueue()
@@ -304,7 +304,8 @@ class AudioOut:
         self._interrupt = threading.Event()
         self._thread: StoppableThread | None = None
         self.tts = TtsEngine()
-        self.device = resolve_audio_device(config.AUDIO_OUTPUT_DEVICE, "out")
+        self.device = resolve_audio_device(
+            device if device is not None else config.AUDIO_OUTPUT_DEVICE, "out")
         self.last_text = ""
         self._last_spoken = ""
         self._last_spoken_at = 0.0

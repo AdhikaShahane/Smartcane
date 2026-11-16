@@ -19,7 +19,13 @@ ok()   { echo "  [PASS] $1"; PASS=$((PASS+1)); }
 bad()  { echo "  [FAIL] $1"; FAIL=$((FAIL+1)); FAILED+=("$1"); }
 info() { echo "         $1"; }
 
-cd "$(dirname "$0")/.." || exit 1
+cd "$(dirname "$0")/.." 2>/dev/null || cd "${0%/*}/.." || {
+  echo "cannot locate the repository root from $0"; exit 2; }
+if [ ! -f smartcane/__main__.py ]; then
+  echo "cannot find smartcane/ - run this from the repo:"
+  echo "  bash tools/healthcheck.sh"
+  exit 2
+fi
 PY=${PYTHON:-python}
 
 echo "============================================================"
