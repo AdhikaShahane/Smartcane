@@ -198,8 +198,10 @@ class SerialLink:
             del buf[:total]
             if ftype == TYPE_FAST and len(payload) >= 4:
                 # seq:u8, dist_cm:u16, flags:u8
+                #   bit0 = reflex asserted, bit1 = motion detected
                 dist = payload[1] | (payload[2] << 8)
-                self._publish(dist_cm=float(dist), motion=payload[3] & 0x01)
+                self._publish(dist_cm=float(dist),
+                              motion=(payload[3] >> 1) & 0x01)
             elif ftype == TYPE_SLOW and len(payload) >= 11:
                 fix, sats = payload[0], payload[1]
                 lat = int.from_bytes(payload[2:6], "little", signed=True) / 1e7
