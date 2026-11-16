@@ -93,10 +93,13 @@ class SerialLink:
         self._state = SensorState()
         self._lock = threading.Lock()
         self._ser = None
+        self._baud = config.SERIAL_BAUD
         self._thread: StoppableThread | None = None
         self._format: str | None = None
         self._buf = bytearray()
         self._mock_dist = 250.0
+        self._discard_count = 0
+        self._discard_logged_at = 0.0
 
     # -- public ------------------------------------------------------------
     def start(self) -> None:
@@ -149,16 +152,64 @@ class SerialLink:
                 glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
                 + glob.glob("/dev/serial0") + glob.glob("/dev/rfcomm*")
                 + [f"COM{i}" for i in range(1, 9) if os.name == "nt"])
+
         for port in candidates:
+            baud = self._probe_baud(port, serial)
             try:
-                ser = serial.Serial(port, config.SERIAL_BAUD,
-                                    timeout=config.SERIAL_TIMEOUT)
-                log.info("opened %s @ %d", port, config.SERIAL_BAUD)
+                ser = serial.Serial(port, baud, timeout=config.SERIAL_TIMEOUT)
+                log.info("opened %s @ %d", port, baud)
                 self._ser = ser
+                self._baud = baud
                 return port
             except Exception as exc:                    # noqa: BLE001
                 log.debug("cannot open %s: %s", port, exc)
         return None
+
+    def _probe_baud(self, port: str, serial) -> int:
+        """Work out which baud rate the Arduino is actually using.
+
+        The sketch on the board may run at 9600 (a plain text sketch) or
+        115200 (our binary protocol). Opening at the wrong rate yields garbage
+        and looks exactly like a broken sensor, so try both and keep whichever
+        one produces parseable data.
+        """
+        candidates = [config.SERIAL_BAUD]
+        for alt in (9600, 19200, 38400, 57600, 115200):
+            if alt not in candidates:
+                candidates.append(alt)
+
+        for baud in candidates:
+            try:
+                ser = serial.Serial(port, baud, timeout=0.1)
+            except Exception as exc:                    # noqa: BLE001
+                log.debug("probe %s @ %d failed: %s", port, baud, exc)
+                continue
+            try:
+                probe = SerialLink(mock=False)
+                deadline = time.monotonic() + 1.2
+                while (time.monotonic() < deadline
+                       and probe._state.frames < 3):
+                    chunk = ser.read(ser.in_waiting or 1)
+                    if chunk:
+                        probe.feed(chunk)
+                if probe._state.frames >= 3:
+                    if baud != config.SERIAL_BAUD:
+                        log.warning("Arduino is talking at %d baud, not %d "
+                                    "- using %d", baud, config.SERIAL_BAUD, baud)
+                    else:
+                        log.info("Arduino confirmed at %d baud", baud)
+                    return baud
+            except Exception as exc:                    # noqa: BLE001
+                log.debug("probe read failed at %d: %s", baud, exc)
+            finally:
+                try:
+                    ser.close()
+                except Exception:                       # noqa: BLE001
+                    pass
+
+        log.warning("could not confirm the Arduino's baud rate - "
+                    "trying %d", config.SERIAL_BAUD)
+        return config.SERIAL_BAUD
 
     def _publish(self, **kw) -> None:
         with self._lock:
@@ -297,7 +348,17 @@ class SerialLink:
         # A sketch that prints "Distance: 150.0 cm" is already in centimetres.
         if dist is not None and not (DIST_MIN_CM <= dist <= DIST_MAX_CM):
             # Corrupt or out-of-range frame: drop it rather than act on it.
-            log.debug("discarding implausible distance %s in %r", dist, text)
+            # Log at most once every two seconds: a bad baud rate produces
+            # thousands of these and would bury the rest of the log.
+            self._discard_count += 1
+            now = time.monotonic()
+            if now - self._discard_logged_at >= 2.0:
+                log.warning(
+                    "serial line is corrupt (%d bad frames, e.g. %r). "
+                    "Check the cable; the binary sketch sends a CRC and "
+                    "would reject these cleanly.",
+                    self._discard_count, text.strip()[:60])
+                self._discard_logged_at = now
             return
         self._publish(
             dist_cm=dist,

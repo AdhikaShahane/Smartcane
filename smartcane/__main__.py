@@ -127,13 +127,8 @@ class SmartCane:
             return
 
         if cmd is intent.Intent.IS_SAFE:
-            sit = self.guidance.assess(sensor, scene)
-            if sit.blocked:
-                self.audio.say(f"Not safe. {self.guidance.describe(sensor, scene)}",
-                               Priority.ANSWER, earcon="urgent")
-            else:
-                self.audio.say("Path is clear. You can walk.",
-                               Priority.ANSWER, earcon="ok")
+            text, earcon = self.guidance.safety_answer(sensor, scene)
+            self.audio.say(text, Priority.ANSWER, earcon=earcon)
             return
 
         if cmd is intent.Intent.HOW_FAR:

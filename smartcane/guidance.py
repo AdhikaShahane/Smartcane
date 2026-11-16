@@ -256,10 +256,28 @@ class Guidance:
         approx = _approx_distance(_round_half(sit.dist_m))
         where = ("right in front of you" if sit.zone == "center"
                  else f"on your {sit.zone}")
-        text = f"I can see {thing} {where}, {approx} away."
+        if approx == "very close":
+            text = f"I can see {thing} {where}, very close."
+        else:
+            text = f"I can see {thing} {where}, {approx} away."
         if sit.movement == "toward":
             text += " It's coming toward you."
         return text
+
+    def safety_answer(self, sensor, scene) -> tuple[str, str]:
+        """Answer 'is it safe?' honestly. Returns (text, earcon).
+
+        The old version only checked whether something was within 0.8 m, so a
+        person plainly visible on camera at 3 m got "the path is clear" --
+        which is exactly the false all-clear that makes the cane untrustworthy.
+        """
+        sit = self.assess(sensor, scene)
+        if sit.blocked:
+            return f"Not safe. {self.describe(sensor, scene)}", "urgent"
+        if sit.dist_m is not None and sit.state == State.ADVISORY:
+            return (f"Caution. {self.describe(sensor, scene)} "
+                    f"You can still walk, but keep to the side."), "advisory"
+        return "The path is clear ahead. You can walk.", "ok"
 
     def steps_to_walk(self, sensor, scene) -> str:
         sit = self.assess(sensor, scene)

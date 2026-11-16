@@ -417,6 +417,54 @@ def test_query_responses() -> None:
         print(f"    \"{line}\"")
 
 
+def test_safety_answer() -> None:
+    """'Is it safe?' must never say 'clear' while something is in the corridor.
+
+    Regression from the Pi run: the camera plainly showed two people at ~3 m
+    and the cane answered "Path is clear. You can walk." because the old check
+    only looked for anything closer than 0.8 m.
+    """
+    print("safety answer")
+    g = Guidance(step_len=0.65)
+
+    class EmptyScene:
+        objects: list = []
+        frame_width = 640
+        frame_height = 480
+        infer_ms = 0.0
+        backend = "test"
+
+        def corridor(self):
+            return []
+
+        def nearest(self, zone=None):
+            return None
+
+    empty = EmptyScene()
+
+    # nothing there -> clear
+    text, earcon = g.safety_answer(FakeSensor(None), empty)
+    check("empty path says clear", "clear" in text.lower(), text)
+    check("clear uses the ok earcon", earcon == "ok", earcon)
+
+    # something visible but far away -> must NOT claim clear
+    text, earcon = g.safety_answer(FakeSensor(1.4), empty)
+    check("object at 1.4 m is not called clear",
+          "clear" not in text.lower(), text)
+    check("object at 1.4 m is a caution", "caution" in text.lower(), text)
+    check("caution uses the advisory earcon", earcon == "advisory", earcon)
+
+    # something very close -> not safe
+    text, earcon = g.safety_answer(FakeSensor(0.5), empty)
+    check("object at 0.5 m says not safe", "not safe" in text.lower(), text)
+    check("danger uses the urgent earcon", earcon == "urgent", earcon)
+
+    for line in (g.safety_answer(FakeSensor(None), empty)[0],
+                 g.safety_answer(FakeSensor(1.4), empty)[0],
+                 g.safety_answer(FakeSensor(0.5), empty)[0]):
+        print(f"    \"{line}\"")
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -429,6 +477,7 @@ def main() -> int:
     test_persistent_hazard_repeats()
     test_phrasing()
     test_query_responses()
+    test_safety_answer()
     test_distance_scaling()
     test_resample()
     test_earcons()
