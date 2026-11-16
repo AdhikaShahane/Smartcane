@@ -12,7 +12,8 @@ from . import __version__, config, intent
 from .asr import Asr, SpeechEvent
 from .audio_out import AudioOut
 from .camera import Camera
-from .guidance import Guidance, Priority, State
+from .guidance import (Guidance, Priority, State, _approx_distance, _round_half,
+                       _with_article)
 from .link import SerialLink
 from .util import get_logger, resolve_audio_device, setup_logging
 from .vision import Vision
@@ -201,10 +202,13 @@ class SmartCane:
             zone = "center"
         nearest = scene.nearest(zone)
         if nearest is None or nearest.dist_m is None:
-            return f"Nothing detected on your {zone}." if zone != "center" \
-                else "Nothing detected ahead."
-        return (f"Something on your {zone}, "
-                f"about {nearest.dist_m:.1f} metres.")
+            if zone == "center":
+                return "I don't see anything straight ahead."
+            return f"I don't see anything on your {zone}."
+        approx = _approx_distance(_round_half(nearest.dist_m))
+        where = "straight ahead" if zone == "center" else f"on your {zone}"
+        return (f"I can see {_with_article(nearest.label)} {where}, "
+                f"{approx} away.")
 
     def _battery_text(self) -> str:
         try:

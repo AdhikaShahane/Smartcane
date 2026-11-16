@@ -247,23 +247,29 @@ class Guidance:
 
     # -- helpers for query intents ----------------------------------------
     def describe(self, sensor, scene) -> str:
+        """Answer 'what is in front of me?' the way a helpful person would."""
         sit = self.assess(sensor, scene)
         if sit.dist_m is None:
-            return "Nothing within range ahead. The path looks clear."
-        label = _nice(sit.label)
+            return ("I don't see anything close in front of you. "
+                    "The path looks clear.")
+        thing = _with_article(sit.label)
         approx = _approx_distance(_round_half(sit.dist_m))
-        where = "ahead" if sit.zone == "center" else f"on your {sit.zone}"
-        return f"{label} {where}, {approx}."
+        where = ("right in front of you" if sit.zone == "center"
+                 else f"on your {sit.zone}")
+        text = f"I can see {thing} {where}, {approx} away."
+        if sit.movement == "toward":
+            text += " It's coming toward you."
+        return text
 
     def steps_to_walk(self, sensor, scene) -> str:
         sit = self.assess(sensor, scene)
         if sit.dist_m is None:
-            return "The path is clear ahead."
+            return "The path is clear ahead. You can keep walking."
         steps = steps_available(_round_half(sit.dist_m), self.step_len)
         if steps == 0:
-            return "Not enough clear space. Stop and wait."
-        return (f"You can walk {steps} "
-                f"{'step' if steps == 1 else 'steps'}.")
+            return "There isn't enough clear space. Please stop and wait."
+        return (f"You can walk {_num(steps)} "
+                f"{'step' if steps == 1 else 'steps'} before the next obstacle.")
 
 
 def _nice(label: str) -> str:
@@ -274,6 +280,12 @@ def _nice(label: str) -> str:
     if label == "dining table":
         return "Table"
     return label.capitalize()
+
+
+def _with_article(label: str) -> str:
+    """'a person', 'an obstacle' - so answers read like speech, not labels."""
+    word = _nice(label).lower()
+    return ("an " if word[:1] in "aeiou" else "a ") + word
 
 
 def _approx_distance(dist_m: float) -> str:

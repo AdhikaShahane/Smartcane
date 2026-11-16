@@ -369,6 +369,54 @@ def test_persistent_hazard_repeats() -> None:
           f"{count} vs ~{expected}")
 
 
+def test_query_responses() -> None:
+    """What the cane says when asked a question.
+
+    The product is a conversation: "what is in front of me" -> "I can see a
+    person right in front of you, about a metre and a half away."
+    """
+    print("query responses")
+    g = Guidance(step_len=0.65)
+
+    class EmptyScene:
+        objects: list = []
+        frame_width = 640
+        frame_height = 480
+        infer_ms = 0.0
+        backend = "test"
+
+        def corridor(self):
+            return []
+
+        def nearest(self, zone=None):
+            return None
+
+    empty = EmptyScene()
+
+    clear = g.describe(FakeSensor(None), empty)
+    check("clear answer is a sentence", clear.endswith(".") and len(clear) > 20,
+          clear)
+    check("clear answer does not claim an object",
+          "don't see" in clear or "nothing" in clear.lower(), clear)
+
+    near = g.describe(FakeSensor(1.5), empty)
+    check("near answer names a thing", "a " in near or "an " in near, near)
+    check("near answer gives a distance", "metre" in near, near)
+    check("sounds like speech, not a label",
+          near.startswith("I can see"), near)
+
+    steps = g.steps_to_walk(FakeSensor(2.0), empty)
+    check("steps answer is a full sentence",
+          steps.startswith("You can walk"), steps)
+    check("steps uses words not digits", " 2 " not in steps, steps)
+
+    blocked = g.steps_to_walk(FakeSensor(0.6), empty)
+    check("too-close answer says stop", "stop" in blocked.lower(), blocked)
+
+    for line in (clear, near, steps, blocked):
+        print(f"    \"{line}\"")
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -380,6 +428,7 @@ def main() -> int:
     test_cooldown_isolation()
     test_persistent_hazard_repeats()
     test_phrasing()
+    test_query_responses()
     test_distance_scaling()
     test_resample()
     test_earcons()
