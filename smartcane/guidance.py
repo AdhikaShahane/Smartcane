@@ -108,7 +108,7 @@ class Guidance:
         sensor_ok = sensor is not None and sensor.valid
         sensor_m = sensor.dist_m if sensor_ok else None
 
-        corridor = scene.corridor() if scene is not None else []
+        corridor = scene.corridor(hazard_only=True) if scene is not None else []
         nearest_vis = None
         if corridor:
             nearest_vis = min(
@@ -154,8 +154,8 @@ class Guidance:
         return sit
 
     # -- announcement ------------------------------------------------------
-    def announce(self, sit: Situation, now: float | None = None
-                 ) -> Announcement | None:
+    def announce(self, sit: Situation, now: float | None = None,
+                 scene=None) -> Announcement | None:
         """Return words only when the situation has meaningfully changed."""
         now = now if now is not None else time.monotonic()
 
@@ -203,9 +203,9 @@ class Guidance:
         self._last_hazard_at = now
         self._clear_since = None
 
-        return self._phrase(sit)
+        return self._phrase(sit, scene)
 
-    def _phrase(self, sit: Situation) -> Announcement:
+    def _phrase(self, sit: Situation, scene=None) -> Announcement:
         label = _nice(sit.label)
         # One rounded value drives BOTH the spoken distance and the step count,
         # so they can never contradict each other.
@@ -225,14 +225,16 @@ class Guidance:
             return Announcement(text, Priority.URGENT,
                                 earcon="urgent", key="urgent")
 
-        # ADVISORY: a step count when there is room to walk, otherwise a steer.
+        # ADVISORY: a step count when there is room to walk, otherwise a steer
+        # towards whichever side actually has more room.
         if sit.zone == "center":
             if steps >= 1:
                 text = (f"{label} ahead, {approx}. "
                         f"Walk straight {_num(steps)} "
                         f"{'step' if steps == 1 else 'steps'}.")
             else:
-                text = f"{label} ahead, {approx}. Step to your right."
+                side = self.best_direction(scene) or "right"
+                text = f"{label} ahead, {approx}. Turn {side}."
         else:
             steer = "right" if sit.zone == "left" else "left"
             text = (f"{label} on your {sit.zone}, {approx}. "
@@ -247,22 +249,54 @@ class Guidance:
 
     # -- helpers for query intents ----------------------------------------
     def describe(self, sensor, scene) -> str:
-        """Answer 'what is in front of me?' the way a helpful person would."""
+        """Answer 'what is in front of me?' by naming everything visible.
+
+        Previously this reported only the single nearest object in the walking
+        corridor, so a chair beside a person was never mentioned.
+        """
+        objects = scene.described(3) if scene is not None else []
+
+        if objects:
+            phrases = []
+            for obj in objects:
+                where = ("right in front of you" if obj.zone == "center"
+                         else f"on your {obj.zone}")
+                if obj.dist_m is not None:
+                    phrases.append(
+                        f"{_with_article(obj.label)} {where}, "
+                        f"{_approx_distance(_round_half(obj.dist_m))} away")
+                else:
+                    phrases.append(f"{_with_article(obj.label)} {where}")
+            if len(phrases) == 1:
+                text = f"I can see {phrases[0]}."
+            else:
+                text = f"I can see {', '.join(phrases[:-1])}, and {phrases[-1]}."
+            if objects[0].movement == "toward":
+                text += " The nearest one is coming toward you."
+            return text
+
         sit = self.assess(sensor, scene)
-        if sit.dist_m is None:
-            return ("I don't see anything close in front of you. "
-                    "The path looks clear.")
-        thing = _with_article(sit.label)
-        approx = _approx_distance(_round_half(sit.dist_m))
-        where = ("right in front of you" if sit.zone == "center"
-                 else f"on your {sit.zone}")
-        if approx == "very close":
-            text = f"I can see {thing} {where}, very close."
-        else:
-            text = f"I can see {thing} {where}, {approx} away."
-        if sit.movement == "toward":
-            text += " It's coming toward you."
-        return text
+        if sit.dist_m is not None:
+            approx = _approx_distance(_round_half(sit.dist_m))
+            if approx == "very close":
+                return ("I don't see it clearly, but something is very close "
+                        "in front of you.")
+            return (f"I don't see anything clearly, but something is "
+                    f"{approx} away.")
+        return ("I don't see anything close in front of you. "
+                "The path looks clear.")
+
+    def best_direction(self, scene) -> str | None:
+        """Which side has more room? Used when the way ahead is blocked."""
+        if scene is None:
+            return None
+        left = scene.nearest("left", hazard_only=True)
+        right = scene.nearest("right", hazard_only=True)
+        left_m = left.dist_m if (left and left.dist_m is not None) else 99.0
+        right_m = right.dist_m if (right and right.dist_m is not None) else 99.0
+        if left_m < 1.0 and right_m < 1.0:
+            return None                       # both sides are tight
+        return "left" if left_m >= right_m else "right"
 
     def safety_answer(self, sensor, scene) -> tuple[str, str]:
         """Answer 'is it safe?' honestly. Returns (text, earcon).
@@ -280,14 +314,42 @@ class Guidance:
         return "The path is clear ahead. You can walk.", "ok"
 
     def steps_to_walk(self, sensor, scene) -> str:
+        """Answer 'how many steps?' — with a turn when the way is blocked.
+
+        The old version only ever said "walk N steps" and never suggested a
+        direction, so a blocked corridor produced no usable guidance.
+        """
         sit = self.assess(sensor, scene)
+
+        # Something already very close: do not tell the user to walk anywhere.
+        if sit.state in (State.STOP, State.URGENT):
+            return ("Stop. Something is very close in front of you. "
+                    "Wait until it moves, then ask me again.")
+
         if sit.dist_m is None:
-            return "The path is clear ahead. You can keep walking."
+            return ("The path ahead is clear. Walk straight three steps, "
+                    "then ask me again.")
+
         steps = steps_available(_round_half(sit.dist_m), self.step_len)
-        if steps == 0:
-            return "There isn't enough clear space. Please stop and wait."
-        return (f"You can walk {_num(steps)} "
-                f"{'step' if steps == 1 else 'steps'} before the next obstacle.")
+
+        if steps >= 1 and sit.zone == "center":
+            return (f"Walk straight {_num(steps)} "
+                    f"{'step' if steps == 1 else 'steps'} before the next "
+                    f"obstacle, then ask me again.")
+
+        direction = self.best_direction(scene)
+        if direction is not None:
+            side = scene.nearest(direction, hazard_only=True) if scene else None
+            side_m = side.dist_m if (side and side.dist_m is not None) else None
+            side_steps = (steps_available(_round_half(side_m), self.step_len)
+                          if side_m is not None else 2)
+            side_steps = max(1, min(side_steps, config.MAX_STEPS_TO_ANNOUNCE))
+            return (f"The way ahead is blocked. Turn {direction}, then walk "
+                    f"{_num(side_steps)} "
+                    f"{'step' if side_steps == 1 else 'steps'}.")
+
+        return ("The way ahead is blocked and both sides are tight. "
+                "Please stop and wait.")
 
 
 def _nice(label: str) -> str:

@@ -1,4 +1,4 @@
-﻿"""Object detection, zone classification and tracking.
+"""Object detection, zone classification and tracking.
 
 The zone/hysteresis and movement-analysis logic is ported from
 `detect_webcam.py` (Ishwari's engine) because it was the strongest part of the
@@ -94,15 +94,32 @@ class Scene:
     def age(self) -> float:
         return time.monotonic() - self.at if self.at else 1e9
 
-    def corridor(self) -> list[TrackedObject]:
-        return [o for o in self.objects if o.zone == "center" and o.confirmed]
+    def corridor(self, hazard_only: bool = False) -> list[TrackedObject]:
+        """Objects in the walking corridor.
 
-    def nearest(self, zone: str | None = None) -> TrackedObject | None:
+        hazard_only=True keeps just the classes worth warning about, so a cup
+        on a table does not stop the user in the street.
+        """
+        pool = [o for o in self.objects if o.zone == "center" and o.confirmed]
+        if hazard_only:
+            pool = [o for o in pool if o.label in config.HAZARD_CLASSES]
+        return pool
+
+    def nearest(self, zone: str | None = None,
+                hazard_only: bool = False) -> TrackedObject | None:
         pool = [o for o in self.objects
                 if o.confirmed and (zone is None or o.zone == zone)]
+        if hazard_only:
+            pool = [o for o in pool if o.label in config.HAZARD_CLASSES]
         if not pool:
             return None
         return min(pool, key=lambda o: (o.dist_m if o.dist_m else 99.0))
+
+    def described(self, limit: int = 3) -> list[TrackedObject]:
+        """Everything worth naming, nearest first."""
+        pool = [o for o in self.objects if o.confirmed]
+        pool.sort(key=lambda o: (o.dist_m if o.dist_m else 99.0))
+        return pool[:limit]
 
 
 def estimate_distance(label: str, box_h: float,

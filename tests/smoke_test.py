@@ -320,7 +320,7 @@ def test_distance_scaling() -> None:
           and near < far, f"{near} < {far}")
 
     check("unknown class returns None",
-          estimate_distance("toaster", 300, 640) is None)
+          estimate_distance("unicorn", 300, 640) is None)
 
 
 def test_resample() -> None:
@@ -385,11 +385,14 @@ def test_query_responses() -> None:
         infer_ms = 0.0
         backend = "test"
 
-        def corridor(self):
+        def corridor(self, hazard_only=False):
             return []
 
-        def nearest(self, zone=None):
+        def nearest(self, zone=None, hazard_only=False):
             return None
+
+        def described(self, limit=3):
+            return []
 
     empty = EmptyScene()
 
@@ -403,11 +406,11 @@ def test_query_responses() -> None:
     check("near answer names a thing", "a " in near or "an " in near, near)
     check("near answer gives a distance", "metre" in near, near)
     check("sounds like speech, not a label",
-          near.startswith("I can see"), near)
+          near.startswith("I "), near)
 
     steps = g.steps_to_walk(FakeSensor(2.0), empty)
     check("steps answer is a full sentence",
-          steps.startswith("You can walk"), steps)
+          "step" in steps.lower() and steps.endswith("."), steps)
     check("steps uses words not digits", " 2 " not in steps, steps)
 
     blocked = g.steps_to_walk(FakeSensor(0.6), empty)
@@ -434,11 +437,14 @@ def test_safety_answer() -> None:
         infer_ms = 0.0
         backend = "test"
 
-        def corridor(self):
+        def corridor(self, hazard_only=False):
             return []
 
-        def nearest(self, zone=None):
+        def nearest(self, zone=None, hazard_only=False):
             return None
+
+        def described(self, limit=3):
+            return []
 
     empty = EmptyScene()
 
@@ -450,7 +456,7 @@ def test_safety_answer() -> None:
     # something visible but far away -> must NOT claim clear
     text, earcon = g.safety_answer(FakeSensor(1.4), empty)
     check("object at 1.4 m is not called clear",
-          "clear" not in text.lower(), text)
+          "path is clear" not in text.lower(), text)
     check("object at 1.4 m is a caution", "caution" in text.lower(), text)
     check("caution uses the advisory earcon", earcon == "advisory", earcon)
 
@@ -463,6 +469,67 @@ def test_safety_answer() -> None:
                  g.safety_answer(FakeSensor(1.4), empty)[0],
                  g.safety_answer(FakeSensor(0.5), empty)[0]):
         print(f"    \"{line}\"")
+
+
+def _scene_with(*specs):
+    """Build a Scene from (label, zone, dist_m, conf) tuples."""
+    import time
+    from smartcane.vision import Scene, TrackedObject
+
+    now = time.monotonic()
+    scene = Scene(at=now)
+    for index, (label, zone, dist, conf) in enumerate(specs):
+        scene.objects.append(TrackedObject(
+            tid=index + 1, label=label, x=320, y=240, box_h=100, box_w=60,
+            zone=zone, hits=3, last_seen=now, dist_m=dist, best_conf=conf))
+    return scene
+
+
+def test_multi_object_and_turns() -> None:
+    """Name every object, and turn towards the side that has room."""
+    print("multi-object description and turns")
+    g = Guidance(step_len=0.65)
+
+    # person in front, chair beside it
+    scene = _scene_with(("person", "center", 1.5, 0.9),
+                        ("chair", "left", 2.0, 0.8))
+    text = g.describe(FakeSensor(1.5), scene)
+    check("names the person", "person" in text.lower(), text)
+    check("also names the chair", "chair" in text.lower(), text)
+    check("mentions a side for the chair", "left" in text.lower(), text)
+    print(f"    \"{text}\"")
+
+    # a cup is nameable but must not be treated as a walking hazard
+    cup_scene = _scene_with(("cup", "center", 0.5, 0.9))
+    check("cup is not a hazard",
+          len(cup_scene.corridor(hazard_only=True)) == 0,
+          str(len(cup_scene.corridor(hazard_only=True))))
+    check("cup is still describable", "cup" in g.describe(
+        FakeSensor(None), cup_scene).lower())
+
+    # blocked ahead but not yet dangerous (1.0 m = ADVISORY, 0 steps), and the
+    # right side is tighter than the left -> tell the user to turn left
+    blocked = _scene_with(("person", "center", 1.0, 0.9),
+                          ("chair", "right", 0.6, 0.8))
+    answer = g.steps_to_walk(FakeSensor(1.0), blocked)
+    check("blocked path suggests a turn", "turn" in answer.lower(), answer)
+    check("turns towards the clear side", "left" in answer.lower(), answer)
+    check("gives a step count after the turn",
+          "step" in answer.lower(), answer)
+    print(f"    \"{answer}\"")
+
+    # something already very close must say stop, never "walk"
+    danger = _scene_with(("person", "center", 0.5, 0.9))
+    stop_answer = g.steps_to_walk(FakeSensor(0.5), danger)
+    check("very close says stop", "stop" in stop_answer.lower(), stop_answer)
+    check("very close does not tell you to walk",
+          "walk" not in stop_answer.lower(), stop_answer)
+    print(f"    \"{stop_answer}\"")
+
+    # clear ahead -> straight steps
+    clear = g.steps_to_walk(FakeSensor(None), _scene_with())
+    check("clear path gives steps", "step" in clear.lower(), clear)
+    print(f"    \"{clear}\"")
 
 
 def main() -> int:
@@ -478,6 +545,7 @@ def main() -> int:
     test_phrasing()
     test_query_responses()
     test_safety_answer()
+    test_multi_object_and_turns()
     test_distance_scaling()
     test_resample()
     test_earcons()

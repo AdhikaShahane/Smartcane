@@ -50,22 +50,67 @@ DETECT_FPS = 8            # inference target; tracking fills the gaps
 # Calibrate with tools/calibrate_distance.py if distances look wrong.
 FOCAL_PX = float(os.getenv("SMARTCANE_FOCAL", "615"))
 
-# Real-world height (metres) used for monocular distance estimation.
-OBJ_HEIGHTS = {
-    "person": 1.70, "bicycle": 1.00, "motorcycle": 1.10, "car": 1.50,
-    "bus": 3.00, "truck": 3.00, "dog": 0.50, "chair": 0.85,
-    "dining table": 0.75, "bench": 0.45, "backpack": 0.50,
-    "potted plant": 0.60, "couch": 0.80, "bed": 0.50, "toilet": 0.70,
-}
-
-# Only these COCO classes are allowed to trigger an announcement.
+# ---------------------------------------------------------------------------
+# COCO classes
+# ---------------------------------------------------------------------------
+# Everything the detector can NAME. The model was trained on these 80 classes
+# and nothing else, so this is the honest ceiling: it cannot see a door, a
+# stair, a curb or a pole, because COCO does not contain them.
 OBSTACLE_CLASSES = {
-    "person", "bicycle", "motorcycle", "car", "bus", "truck", "dog",
-    "chair", "dining table", "bench", "couch", "bed", "toilet",
-    "backpack", "suitcase", "potted plant",
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
+    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
+    "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
+    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
+    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
+    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush",
 }
 
-# Walking corridor as a fraction of frame width (left, right).
+# The subset worth WARNING about while walking. Everything else can still be
+# named when asked ("what is in front of me") but must not fill the air with
+# "cup ahead, cup ahead" while the user is trying to cross a road.
+HAZARD_CLASSES = {
+    "person", "bicycle", "car", "motorcycle", "bus", "train", "truck",
+    "boat", "bench", "chair", "couch", "dining table", "bed", "toilet",
+    "refrigerator", "oven", "potted plant", "dog", "horse", "cow", "sheep",
+    "suitcase", "backpack", "fire hydrant", "stop sign", "traffic light",
+    "parking meter", "tv", "vase", "teddy bear",
+}
+
+# Real-world height (metres) used for monocular distance estimation.
+# Anything missing here is still detected and named, just without a distance.
+OBJ_HEIGHTS = {
+    "person": 1.70, "bicycle": 1.00, "car": 1.50, "motorcycle": 1.10,
+    "bus": 3.00, "truck": 3.00, "train": 3.50, "boat": 2.00,
+    "traffic light": 1.00, "fire hydrant": 0.75, "stop sign": 0.75,
+    "parking meter": 1.30, "bench": 0.45,
+    "bird": 0.15, "cat": 0.25, "dog": 0.50, "horse": 1.60, "sheep": 0.80,
+    "cow": 1.40, "elephant": 2.50, "bear": 1.20, "zebra": 1.40,
+    "giraffe": 3.00,
+    "backpack": 0.50, "umbrella": 0.90, "handbag": 0.25, "tie": 0.30,
+    "suitcase": 0.65, "skis": 1.20, "snowboard": 1.00, "surfboard": 1.20,
+    "baseball bat": 0.80, "baseball glove": 0.30, "skateboard": 0.20,
+    "tennis racket": 0.60, "kite": 0.50, "frisbee": 0.10,
+    "bottle": 0.25, "wine glass": 0.20, "cup": 0.10, "fork": 0.20,
+    "knife": 0.25, "spoon": 0.18, "bowl": 0.08,
+    "banana": 0.18, "apple": 0.08, "sandwich": 0.10, "orange": 0.08,
+    "broccoli": 0.15, "carrot": 0.20, "hot dog": 0.10, "pizza": 0.04,
+    "donut": 0.08, "cake": 0.15,
+    "chair": 0.85, "couch": 0.80, "potted plant": 0.60, "bed": 0.50,
+    "dining table": 0.75, "toilet": 0.70,
+    "tv": 0.60, "laptop": 0.25, "mouse": 0.05, "remote": 0.03,
+    "keyboard": 0.03, "cell phone": 0.15,
+    "microwave": 0.30, "oven": 0.70, "toaster": 0.20, "sink": 0.20,
+    "refrigerator": 1.70, "book": 0.25, "clock": 0.30, "vase": 0.30,
+    "scissors": 0.18, "teddy bear": 0.30, "hair drier": 0.20,
+    "toothbrush": 0.18,
+}
 CORRIDOR_LEFT = 0.30
 CORRIDOR_RIGHT = 0.70
 ZONE_HYSTERESIS = 0.04    # deadband so objects do not flicker left/right

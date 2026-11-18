@@ -224,7 +224,7 @@ class SmartCane:
                 sensor = self.link.state()
                 scene = self.vision.scene()
                 sit = self.guidance.assess(sensor, scene)
-                ann = self.guidance.announce(sit)
+                ann = self.guidance.announce(sit, scene=scene)
                 if ann is not None:
                     self.audio.say_announcement(ann)
 
