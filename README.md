@@ -26,12 +26,24 @@ three is missing, and says so.
 
 - **Warns of obstacles** using ultrasonic distance, with stereo earcons that
   convey direction and proximity faster than a sentence can.
-- **Identifies what is ahead** with a quantised detector and describes it in one
-  short sentence, only when the situation changes.
-- **Guides in steps**: *"Chair ahead, about 1.5 metres. Walk straight 1 step."*
-- **Answers questions hands-free** — no push-to-talk: *"what is ahead"*,
-  *"how many steps"*, *"is it safe"*, *"turn left"*, *"stop"*.
+- **Names every object it can see** — all 80 COCO classes, not just people.
+  Ask *"what is in front of me"* and it lists up to three, nearest first:
+  *"I can see a person right in front of you, about a metre and a half away,
+  and a chair on your left, about two metres away."*
+- **Guides in steps, with turns**: *"The way ahead is blocked. Turn left, then
+  walk two steps."* or *"The path ahead is clear. Walk straight three steps,
+  then ask me again."*
+- **Answers questions hands-free** — no push-to-talk: *"what is in front of
+  me"*, *"how many steps"*, *"is it safe"*, *"turn left"*, *"stop"*.
 - **Interrupts itself** when you start speaking (barge-in).
+
+### What it cannot see
+
+The detector is YOLOv8n trained on COCO. **COCO contains no door, no stairs,
+no curb and no pole**, so those cannot be recognised no matter how they are
+described. COCO's 80 classes are things like person, chair, table, bench,
+bicycle, car, dog, bottle and tv. Covering doors and steps would need a
+custom-trained model — that is a dataset problem, not a bug.
 
 ## Design rules
 
