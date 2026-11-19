@@ -186,7 +186,7 @@ ALERT_DISTANCE_M = float(os.getenv("SMARTCANE_ALERT_DISTANCE", "1.0"))
 # A segmentation model flickers between classes on the same object. Naming the
 # first frame it sees produces nonsense, so a label must earn the right to be
 # spoken: enough votes, and a clear majority.
-LABEL_MIN_VOTES = 3
+LABEL_MIN_VOTES = 2
 LABEL_MIN_SHARE = 0.60
 # A component smaller than this fraction of the frame is noise, not an object.
 SEG_MIN_AREA_FRAC = 0.012
@@ -272,8 +272,8 @@ CORRIDOR_RIGHT = 0.70
 ZONE_HYSTERESIS = 0.04    # deadband so objects do not flicker left/right
 
 # Tracker
-TRACK_MAX_AGE = 1.0       # seconds before an unmatched track is dropped
-TRACK_MAX_DIST = 140      # px, max centroid jump to be considered the same object
+TRACK_MAX_AGE = 3.0       # seconds before an unmatched track is dropped
+TRACK_MAX_DIST = 180      # px, max centroid jump to be considered the same object
 TRACK_MIN_HITS = 2        # frames a track must exist before it may be announced
 # A very confident first sighting is announced immediately instead of waiting
 # for a second frame. At ~3 detections/sec, waiting costs ~330 ms of delay on

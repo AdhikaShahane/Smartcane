@@ -1,4 +1,4 @@
-"""ADE20K semantic segmentation: scene understanding for a walking cane.
+﻿"""ADE20K semantic segmentation: scene understanding for a walking cane.
 
 Why segmentation instead of detection
 -------------------------------------
@@ -165,11 +165,13 @@ def _components(binary: np.ndarray) -> list[np.ndarray]:
     return [binary] if binary.any() else []
 
 
-def mask_to_objects(mask: np.ndarray, min_area_frac: float = 0.004
+def mask_to_objects(mask: np.ndarray, min_area_frac: float | None = None
                     ) -> list[SegObject]:
     """Turn a class mask into bounding boxes for the existing tracker."""
     if mask is None or mask.size == 0:
         return []
+    if min_area_frac is None:
+        min_area_frac = config.SEG_MIN_AREA_FRAC
     h, w = mask.shape
     obstacle = obstacle_mask(mask)
     if not obstacle.any():

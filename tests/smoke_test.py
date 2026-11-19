@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Smoke tests that need no hardware.
 
 Run on the Pi or a laptop:
@@ -741,6 +741,70 @@ def test_slow_segmentation_self_disables() -> None:
         cfg.SEG_MAX_MS, cfg.SEG_WARMUP_FRAMES = old_max, old_warm
 
 
+def test_naming_at_slow_frame_rate() -> None:
+    """A track must survive a slow detector, or nothing is ever named.
+
+    Real failure on the Pi: segmentation took 0.8-3.5 s per frame while
+    TRACK_MAX_AGE was 1.0 s, so every track expired before the next frame
+    arrived. Each frame created a brand new track with a single label vote, the
+    vote never reached the threshold, and every object - cabinet, chair,
+    whatever - was announced as "obstacle" forever.
+    """
+    print("naming survives a slow frame rate")
+    from smartcane.vision import Detection, Vision
+
+    class FakeCam:
+        def latest(self):
+            return None
+
+    vision = Vision(FakeCam(), mock=False)
+    vision.enabled = True
+    box = Detection("chair", 300.0, 200.0, 380.0, 400.0, 0.9)
+
+    # one detection per second - a realistic 1 fps segmentation loop
+    start = 100.0
+    for index in range(3):
+        vision._update_tracks([box], start + index * 1.0, 640)
+
+    check("one track, not one per frame", len(vision._tracks) == 1,
+          f"{len(vision._tracks)} tracks")
+    track = list(vision._tracks.values())[0]
+    check("label became stable at 1 fps", track.label_stable,
+          f"{track.label} stable={track.label_stable}")
+    check("the object is named, not 'obstacle'",
+          track.spoken_label == "chair", track.spoken_label)
+
+
+def test_stop_gives_an_exit() -> None:
+    """A stop with no exit is only half an instruction."""
+    print("stop tells you which way to move")
+    from smartcane.segmentation import free_space_from_mask, synthetic_mask
+
+    def scene_blocked(where):
+        scene = _scene_with(("chair", "center", 0.6, 0.9))
+        scene.free_space = free_space_from_mask(synthetic_mask(blocked=where))
+        return scene
+
+    open_left = scene_blocked(None)
+    g1 = Guidance(step_len=0.65)
+    text = g1._stop_text(g1.assess(FakeSensor(0.6), open_left), open_left)
+    check("says which way to step", "step to your left" in text.lower(), text)
+
+    blocked_left = scene_blocked("left")
+    g2 = Guidance(step_len=0.65)
+    text2 = g2._stop_text(g2.assess(FakeSensor(0.6), blocked_left),
+                          blocked_left)
+    check("turns the other way when left is blocked",
+          "step to your right" in text2.lower(), text2)
+
+    both = scene_blocked("all")
+    g3 = Guidance(step_len=0.65)
+    text3 = g3._stop_text(g3.assess(FakeSensor(0.6), both), both)
+    check("refuses to invent an exit when none exists",
+          "both sides are blocked" in text3.lower(), text3)
+    check("still leads with Stop", text3.startswith("Stop!"), text3)
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -768,6 +832,8 @@ def main() -> int:
     test_serial_parsers()
     test_serial_trust()
     test_slow_segmentation_self_disables()
+    test_naming_at_slow_frame_rate()
+    test_stop_gives_an_exit()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")

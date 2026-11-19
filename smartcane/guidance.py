@@ -112,7 +112,24 @@ class Guidance:
         self._clear_since: float | None = None
         self._clear_announced = False
 
-    def _stop_text(self, sit: Situation) -> str:
+    def _escape_hint(self, scene) -> str:
+        """Which way is out of a stop.
+
+        A stop with no exit is only half an instruction: the user is told not
+        to move but not where they may move to. The direction is only spoken
+        when it was measured - never guessed.
+        """
+        if scene is None:
+            return ""
+        direction = self.best_direction(scene)
+        if direction is not None:
+            return f" Step to your {direction}."
+        free = getattr(scene, "free_space", None)
+        if free is not None and getattr(free, "valid", False):
+            return " Both sides are blocked. Stay where you are."
+        return ""
+
+    def _stop_text(self, sit: Situation, scene=None) -> str:
         """Explain a STOP. Never just shout 'Stop!' at someone.
 
         The user has to know what they must not walk into, how far it is, where
@@ -143,7 +160,7 @@ class Guidance:
         else:
             why = " Do not move forward."
 
-        return f"Stop! {thing} is {where}{distance}.{why}"
+        return f"Stop! {thing} is {where}{distance}.{why}" + self._escape_hint(scene)
 
     # -- assessment --------------------------------------------------------
     def assess(self, sensor, scene) -> Situation:
@@ -286,11 +303,11 @@ class Guidance:
         steps = steps_available(dist, self.step_len)
 
         if sit.state == State.STOP:
-            return Announcement(self._stop_text(sit), Priority.REFLEX,
+            return Announcement(self._stop_text(sit, scene), Priority.REFLEX,
                                 earcon="stop", key="stop")
 
         if sit.state == State.URGENT:
-            return Announcement(self._stop_text(sit), Priority.URGENT,
+            return Announcement(self._stop_text(sit, scene), Priority.URGENT,
                                 earcon="urgent", key="urgent")
 
         # ADVISORY: a step count when there is room to walk, otherwise a steer
