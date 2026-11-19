@@ -252,8 +252,12 @@ def test_phrasing() -> None:
         print(f"    \"{line}\"")
 
     check("something was said", bool(said), f"{len(said)} lines")
-    check("stop is short and blunt",
-          any(s.strip() == "Stop." for s in said))
+    check("stop command leads with Stop",
+          any(s.startswith("Stop!") for s in said),
+          str([s for s in said if s.startswith("Stop")]))
+    check("stop explains why, not just 'Stop.'",
+          any(s.startswith("Stop!") and len(s) > 25 for s in said),
+          str([s for s in said if s.startswith("Stop")]))
     check("no digits spelled as numerals in step counts",
           not any("straight 1 step" in s or "straight 2 step" in s for s in said))
     check("distance uses words not '1 metre'",

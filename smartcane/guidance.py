@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 from . import config
+from .risk import RiskLevel, RiskReport, assess_scene
 from .util import clamp, get_logger
 
 log = get_logger("guidance")
@@ -59,6 +60,14 @@ class Situation:
     blocked: bool = False
     sensor_ok: bool = True
     source: str = "vision"
+    # Filled in by the risk engine. `risk` is the graded judgement; `state` is
+    # the legacy announcement bucket derived from it.
+    risk: RiskLevel = RiskLevel.NONE
+    reason: str = ""
+    ttc: float | None = None
+    closing_speed: float | None = None
+    uncertain: bool = False
+    report: RiskReport | None = None
 
 
 def step_length_from_gait(a_max: float, a_min: float,
@@ -90,7 +99,7 @@ def _round_half(dist_m: float) -> float:
 
 
 class Guidance:
-    def __init__(self, step_len: float = config.STEP_DEFAULT) -> None:
+    def __init__(self, step_len: float = config.STEP_M) -> None:
         self.step_len = step_len
         self._state = State.CLEAR
         self._last_key = ""
@@ -103,54 +112,89 @@ class Guidance:
         self._clear_since: float | None = None
         self._clear_announced = False
 
+    def _stop_text(self, sit: Situation) -> str:
+        """Explain a STOP. Never just shout 'Stop!' at someone.
+
+        The user has to know what they must not walk into, how far it is, where
+        it is, and why it is dangerous - all in one short breath.
+        """
+        unnamed = sit.uncertain or sit.label in ("", "obstacle")
+        if unnamed:
+            thing = "An unidentified obstacle"
+        else:
+            thing = _with_article(sit.label).capitalize()
+
+        where = ("directly in front of you" if sit.zone == "center"
+                 else f"on your {sit.zone}")
+
+        if sit.dist_m is None:
+            distance = ""
+        elif sit.dist_m < 1.0:
+            distance = f" at approximately {int(round(sit.dist_m * 100))} centimetres"
+        else:
+            distance = (" at approximately "
+                        + _approx_distance(_round_half(sit.dist_m))
+                        .replace("about ", ""))
+
+        if sit.ttc is not None and sit.ttc <= config.TTC_CRITICAL_SEC:
+            why = " Collision risk."
+        elif sit.state == State.STOP:
+            why = " Do not move forward."
+        else:
+            why = " Do not move forward."
+
+        return f"Stop! {thing} is {where}{distance}.{why}"
+
     # -- assessment --------------------------------------------------------
     def assess(self, sensor, scene) -> Situation:
+        """Grade the scene with the risk engine, then bucket it for speech.
+
+        Distance alone is no longer what decides danger: the risk engine also
+        weighs whether the object is in the walking corridor, whether it is
+        closing, and how long until contact.
+        """
         sensor_ok = sensor is not None and sensor.valid
         sensor_m = sensor.dist_m if sensor_ok else None
 
-        corridor = scene.corridor(hazard_only=True) if scene is not None else []
-        nearest_vis = None
-        if corridor:
-            nearest_vis = min(
-                corridor, key=lambda o: o.dist_m if o.dist_m else 99.0)
+        report = assess_scene(scene, sensor_m)
+        sit = Situation(sensor_ok=sensor_ok, risk=report.level, report=report)
 
-        # Ultrasonic is authoritative for *how far*: it sees walls, poles and
-        # glass that the detector cannot label. Vision is authoritative for
-        # *what it is*. Take the nearer of the two, because whichever is closer
-        # is the thing the user is about to hit.
-        dist = None
-        label = ""
-        zone = "center"
-        movement = "stationary"
+        primary = report.primary
+        if primary is not None:
+            sit.label = primary.label
+            sit.dist_m = primary.dist_m
+            sit.zone = primary.zone
+            sit.source = primary.source
+            sit.reason = primary.reason
+            sit.ttc = primary.ttc
+            sit.closing_speed = primary.closing_speed
+            sit.uncertain = primary.uncertain
 
-        if sensor_m is not None:
-            dist = sensor_m
-            label = "obstacle"
-        if nearest_vis is not None and nearest_vis.dist_m is not None:
-            if dist is None or nearest_vis.dist_m < dist:
-                dist = nearest_vis.dist_m
-                label = nearest_vis.label
-                zone = nearest_vis.zone
-                movement = nearest_vis.movement
+        # Carry the tracked object's motion so the phrase can mention it.
+        if scene is not None and primary is not None:
+            match = scene.nearest(primary.zone)
+            if match is not None and match.label == primary.label:
+                sit.movement = match.movement
 
-        sit = Situation(label=label, dist_m=dist, zone=zone,
-                        movement=movement, sensor_ok=sensor_ok)
-
-        if dist is None:
-            sit.state = State.CLEAR
-        elif dist <= config.STOP_METERS:
-            sit.state = State.STOP
-        elif dist <= config.URGENT_METERS:
-            sit.state = State.URGENT
-        elif dist <= config.ADVISORY_METERS:
+        # Graded risk -> legacy announcement bucket.
+        if report.level == RiskLevel.CRITICAL:
+            sit.state = (State.STOP
+                         if (sit.dist_m is not None
+                             and sit.dist_m <= config.STOP_METERS)
+                         else State.URGENT)
+        elif report.level == RiskLevel.MEDIUM:
             sit.state = State.ADVISORY
-        elif dist <= config.WATCH_METERS:
-            sit.state = State.WATCH
+        elif report.level == RiskLevel.LOW:
+            # Visible but not threatening: watch it silently unless it is near.
+            sit.state = (State.WATCH
+                         if (sit.dist_m is not None
+                             and sit.dist_m <= config.WATCH_METERS)
+                         else State.CLEAR)
         else:
             sit.state = State.CLEAR
 
         sit.blocked = sit.state in (State.URGENT, State.STOP)
-        sit.steps = steps_available(dist, self.step_len)
+        sit.steps = steps_available(sit.dist_m, self.step_len)
         return sit
 
     # -- announcement ------------------------------------------------------
@@ -214,15 +258,11 @@ class Guidance:
         steps = steps_available(dist, self.step_len)
 
         if sit.state == State.STOP:
-            return Announcement("Stop.", Priority.REFLEX,
+            return Announcement(self._stop_text(sit), Priority.REFLEX,
                                 earcon="stop", key="stop")
 
         if sit.state == State.URGENT:
-            if sit.zone == "center":
-                text = f"{label} right in front of you. Stop."
-            else:
-                text = f"Careful, {label.lower()} very close on your {sit.zone}."
-            return Announcement(text, Priority.URGENT,
+            return Announcement(self._stop_text(sit), Priority.URGENT,
                                 earcon="urgent", key="urgent")
 
         # ADVISORY: a step count when there is room to walk, otherwise a steer
@@ -297,6 +337,82 @@ class Guidance:
         if left_m < 1.0 and right_m < 1.0:
             return None                       # both sides are tight
         return "left" if left_m >= right_m else "right"
+
+    def clearance(self, scene, zone: str) -> float | None:
+        """Nearest hazard on one side, or None when nothing was detected.
+
+        None means "nothing detected", NOT "guaranteed clear". Callers must
+        phrase it as "appears clear", never as a promise.
+        """
+        if scene is None:
+            return None
+        obj = scene.nearest(zone, hazard_only=True)
+        if obj is None or obj.dist_m is None:
+            return None
+        return obj.dist_m
+
+    def reach_object(self, obj, scene) -> str:
+        """Steps to reach a specific, already-identified object."""
+        if obj is None:
+            return ("I am not sure which object you mean. Ask me what is in "
+                    "front of you first, then ask how to reach it.")
+        if obj.dist_m is None:
+            return ("I can see it but I cannot estimate the distance. "
+                    "Please move a little closer and ask again.")
+        steps = int(round(obj.dist_m / self.step_len))
+        steps = max(1, min(steps, config.MAX_STEPS_TO_REACH))
+        if obj.zone == "center":
+            return (f"Walk approximately {_num(steps)} steps forward. "
+                    f"It is directly ahead.")
+        return (f"Turn slightly {obj.zone} and walk approximately "
+                f"{_num(steps)} steps.")
+
+    def bypass(self, sensor, scene) -> str:
+        """How to get around whatever is blocking the path."""
+        sit = self.assess(sensor, scene)
+        if sit.state in (State.STOP, State.URGENT):
+            return "Stop first. Something is too close to step around safely."
+        if sit.state == State.CLEAR:
+            return "Nothing is blocking your path. Continue walking forward."
+
+        direction = self.best_direction(scene)
+        if direction is None:
+            return ("Both sides look tight. Please stop and wait, or ask "
+                    "someone nearby for help.")
+
+        side_m = self.clearance(scene, direction)
+        steps = (steps_available(_round_half(side_m), self.step_len)
+                 if side_m is not None else 2)
+        steps = max(1, min(steps, config.MAX_STEPS_TO_ANNOUNCE))
+        unnamed = sit.uncertain or sit.label in ("", "obstacle")
+        thing = ("an unidentified obstacle" if unnamed
+                 else _with_article(sit.label))
+        return (f"{thing.capitalize()} is blocking your path. Turn slightly "
+                f"{direction} and walk {_num(steps)} steps to go around it.")
+
+    def describe_all(self, sensor, scene) -> str:
+        """'What objects are around me?' — all three zones, not just ahead."""
+        if scene is None or not scene.objects:
+            sit = self.assess(sensor, scene)
+            if sit.dist_m is None:
+                return "I do not see any objects around you."
+            return (f"I do not recognise any objects, but something is "
+                    f"{_approx_distance(_round_half(sit.dist_m))} ahead.")
+        parts = []
+        for zone, where in (("center", "ahead"),
+                            ("left", "on your left"),
+                            ("right", "on your right")):
+            obj = scene.nearest(zone, hazard_only=False)
+            if obj is None:
+                continue
+            if obj.dist_m is not None:
+                parts.append(f"{_with_article(obj.label)} {where}, "
+                             f"{_approx_distance(_round_half(obj.dist_m))} away")
+            else:
+                parts.append(f"{_with_article(obj.label)} {where}")
+        if not parts:
+            return "I do not see any objects around you."
+        return "I can see " + "; ".join(parts) + "."
 
     def safety_answer(self, sensor, scene) -> tuple[str, str]:
         """Answer 'is it safe?' honestly. Returns (text, earcon).

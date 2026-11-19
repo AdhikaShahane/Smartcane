@@ -37,6 +37,11 @@ class SmartCane:
         self._last_query_at = 0.0
         self._fault_warned = False
         self._keyboard_mode = False
+        # What we were last talking about, so "how do I reach it" refers to
+        # the object just described instead of starting from scratch.
+        self._ctx_obj = None
+        self._ctx_dist: float | None = None
+        self._ctx_at = 0.0
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -111,6 +116,61 @@ class SmartCane:
             return
         self.handle(cmd)
 
+    # -- conversation context ---------------------------------------------
+    def _remember(self, obj) -> None:
+        self._ctx_obj = obj
+        self._ctx_dist = obj.dist_m if obj is not None else None
+        self._ctx_at = time.monotonic()
+
+    def _context_object(self):
+        """The object we last talked about, refreshed from the live scene."""
+        if self._ctx_obj is None:
+            return None
+        if time.monotonic() - self._ctx_at > config.CONTEXT_TTL_SEC:
+            return None
+        scene = self.vision.scene()
+        for obj in scene.objects:
+            if obj.tid == self._ctx_obj.tid and obj.label == self._ctx_obj.label:
+                return obj
+        return None
+
+    def _passed_text(self, scene) -> str:
+        if self._ctx_obj is None:
+            return ("I am not tracking an object. Ask me what is in front of "
+                    "you first.")
+        live = self._context_object()
+        if live is None:
+            return ("Yes. It is no longer in view, so you have passed it. "
+                    "You can continue walking.")
+        if live.dist_m is not None and self._ctx_dist is not None:
+            if live.dist_m > self._ctx_dist + 0.5:
+                return "Not yet. It is still ahead of you."
+            if live.dist_m < self._ctx_dist - 0.5:
+                return "Not yet. You are getting closer to it."
+        return "It is still in view, so you have not passed it yet."
+
+    def _turn_text(self, sensor, scene) -> str:
+        sit = self.guidance.assess(sensor, scene)
+        if sit.state in (State.STOP, State.URGENT):
+            return "Stop first. Something is too close to turn safely."
+        if sit.state == State.CLEAR:
+            return "You can continue straight ahead. Nothing is blocking you."
+        direction = self.guidance.best_direction(scene)
+        if direction is None:
+            return "Both sides look tight. Please stop and wait."
+        return f"Turn slightly {direction}. That side has more room."
+
+    def _side_text(self, scene, side: str) -> str:
+        obj = scene.nearest(side, hazard_only=False) if scene else None
+        if obj is None:
+            return (f"I do not detect anything on your {side}. "
+                    f"I cannot confirm it is completely clear.")
+        if obj.dist_m is not None:
+            approx = _approx_distance(_round_half(obj.dist_m))
+            return (f"I can see {_with_article(obj.label)} on your {side}, "
+                    f"{approx} away.")
+        return f"I can see {_with_article(obj.label)} on your {side}."
+
     # -- command dispatch --------------------------------------------------
     def handle(self, cmd: intent.Intent) -> None:
         sensor = self.link.state()
@@ -122,7 +182,41 @@ class SmartCane:
             return
 
         if cmd in (intent.Intent.WHAT_AHEAD, intent.Intent.DESCRIBE):
+            top = scene.described(1)
+            self._remember(top[0] if top else None)
             self.audio.say(self.guidance.describe(sensor, scene),
+                           Priority.ANSWER, earcon="ok")
+            return
+
+        if cmd is intent.Intent.ALL_OBJECTS:
+            self.audio.say(self.guidance.describe_all(sensor, scene),
+                           Priority.ANSWER, earcon="ok")
+            return
+
+        if cmd is intent.Intent.REACH:
+            self.audio.say(
+                self.guidance.reach_object(self._context_object(), scene),
+                Priority.ANSWER, earcon="ok")
+            return
+
+        if cmd is intent.Intent.PASSED:
+            self.audio.say(self._passed_text(scene),
+                           Priority.ANSWER, earcon="ok")
+            return
+
+        if cmd is intent.Intent.TURN:
+            self.audio.say(self._turn_text(sensor, scene),
+                           Priority.ANSWER, earcon="ok")
+            return
+
+        if cmd is intent.Intent.AROUND:
+            self.audio.say(self.guidance.bypass(sensor, scene),
+                           Priority.ANSWER, earcon="ok")
+            return
+
+        if cmd in (intent.Intent.LEFT_CHECK, intent.Intent.RIGHT_CHECK):
+            side = ("left" if cmd is intent.Intent.LEFT_CHECK else "right")
+            self.audio.say(self._side_text(scene, side),
                            Priority.ANSWER, earcon="ok")
             return
 

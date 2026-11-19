@@ -27,9 +27,16 @@ class Intent(str, Enum):
     STOP = "stop"
     WHAT_AHEAD = "what_ahead"
     DESCRIBE = "describe"
+    ALL_OBJECTS = "all_objects"
     WHERE_AM_I = "where_am_i"
     IS_SAFE = "is_safe"
     HOW_FAR = "how_far"
+    REACH = "reach"
+    PASSED = "passed"
+    TURN = "turn"
+    AROUND = "around"
+    LEFT_CHECK = "left_check"
+    RIGHT_CHECK = "right_check"
     REPEAT = "repeat"
     LEFT = "left"
     RIGHT = "right"
@@ -66,6 +73,48 @@ PHRASES: List[Tuple[str, Intent]] = [
     ("describe what you see", Intent.DESCRIBE),
     ("what do you see", Intent.DESCRIBE),
     ("look around", Intent.DESCRIBE),
+
+    ("what objects are around me", Intent.ALL_OBJECTS),
+    ("what is around me", Intent.ALL_OBJECTS),
+    ("what else is there", Intent.ALL_OBJECTS),
+    ("list the objects", Intent.ALL_OBJECTS),
+    ("what do you see around me", Intent.ALL_OBJECTS),
+
+    # -- referring back to the object just described -----------------------
+    ("how do i reach it", Intent.REACH),
+    ("how do i get there", Intent.REACH),
+    ("how do i get to it", Intent.REACH),
+    ("guide me towards it", Intent.REACH),
+    ("guide me to it", Intent.REACH),
+    ("take me to it", Intent.REACH),
+
+    ("have i passed it", Intent.PASSED),
+    ("did i pass it", Intent.PASSED),
+    ("am i past it", Intent.PASSED),
+    ("is it behind me", Intent.PASSED),
+    ("have i passed the obstacle", Intent.PASSED),
+
+    ("which direction should i turn", Intent.TURN),
+    ("which way should i go", Intent.TURN),
+    ("which direction", Intent.TURN),
+    ("where should i go", Intent.TURN),
+    ("where do i go", Intent.TURN),
+
+    ("guide me around it", Intent.AROUND),
+    ("how do i get around it", Intent.AROUND),
+    ("how do i go around", Intent.AROUND),
+    ("help me around this obstacle", Intent.AROUND),
+    ("take me around it", Intent.AROUND),
+
+    ("is there an obstacle on my left", Intent.LEFT_CHECK),
+    ("what is on my left", Intent.LEFT_CHECK),
+    ("is my left clear", Intent.LEFT_CHECK),
+    ("anything on my left", Intent.LEFT_CHECK),
+
+    ("is there an obstacle on my right", Intent.RIGHT_CHECK),
+    ("what is on my right", Intent.RIGHT_CHECK),
+    ("is my right clear", Intent.RIGHT_CHECK),
+    ("anything on my right", Intent.RIGHT_CHECK),
 
     ("where am i", Intent.WHERE_AM_I),
     ("what is my location", Intent.WHERE_AM_I),
@@ -143,6 +192,12 @@ MAX_EXTRA_CHARS = 12       # an utterance longer than phrase+this is a sentence
 
 _PHRASE_LIST = [p for p, _ in PHRASES]
 _INTENT_OF = {p: i for p, i in PHRASES}
+# Token-sorted phrase strings, precomputed once. Sorting them on every call was
+# costing ~9 ms per classification, which on a Pi 4 would be ~30 ms of avoidable
+# delay before the cane even starts thinking about what to say.
+_SORTED_PHRASES = [
+    (p, " ".join(sorted(p.split())), set(p.split())) for p in _PHRASE_LIST
+]
 
 
 def grammar_words() -> List[str]:
@@ -159,8 +214,8 @@ def grammar_phrases() -> List[str]:
     return list(_PHRASE_LIST)
 
 
-def _score(text: str, phrase: str) -> float:
-    """Whole-utterance similarity, word-order insensitive.
+def _score_sorted(text_sorted: str, phrase_sorted: str) -> float:
+    """Similarity of two already token-sorted strings.
 
     Deliberately NOT `partial_ratio` / `token_set_ratio`. Both score a phrase
     that is a *subset* of the text at 100, so `partial_ratio("left",
@@ -169,10 +224,9 @@ def _score(text: str, phrase: str) -> float:
     an always-listening cane, so substring scorers are banned here.
     """
     if _HAVE_RAPIDFUZZ:
-        return float(fuzz.token_sort_ratio(text, phrase))
-    a = " ".join(sorted(text.split()))
-    b = " ".join(sorted(phrase.split()))
-    return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
+        return float(fuzz.ratio(text_sorted, phrase_sorted))
+    return difflib.SequenceMatcher(None, text_sorted,
+                                   phrase_sorted).ratio() * 100.0
 
 
 def classify(text: str) -> Tuple[Intent, float, str]:
@@ -182,18 +236,26 @@ def classify(text: str) -> Tuple[Intent, float, str]:
         return Intent.UNKNOWN, 0.0, ""
 
     n_words = len(clean.split())
-    best_phrase, best_score = "", 0.0
+    text_words = set(clean.split())
+    text_sorted = " ".join(sorted(clean.split()))
+    text_len = len(clean)
 
-    for phrase in _PHRASE_LIST:
+    best_phrase, best_score = "", 0.0
+    for phrase, phrase_sorted, phrase_words in _SORTED_PHRASES:
         # GUARD 1: a bare word must never match a multi-word command.
         # "left" alone is a preposition in conversation; "turn left" is a command.
         if n_words < len(phrase.split()):
             continue
         # GUARD 2: an utterance much longer than the phrase is a different
         # sentence that merely shares words ("i left my bag at home").
-        if len(clean) > len(phrase) + MAX_EXTRA_CHARS:
+        if text_len > len(phrase) + MAX_EXTRA_CHARS:
             continue
-        score = _score(clean, phrase)
+        # CHEAP FILTER: a phrase sharing no word with the utterance cannot
+        # reach the threshold anyway, and scoring all 100+ of them was the
+        # single largest cost in the decision layer.
+        if not (text_words & phrase_words):
+            continue
+        score = _score_sorted(text_sorted, phrase_sorted)
         if score > best_score:
             best_phrase, best_score = phrase, score
 

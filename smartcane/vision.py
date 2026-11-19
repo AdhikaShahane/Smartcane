@@ -70,7 +70,9 @@ class TrackedObject:
     dist_m: float | None
     movement: str = "stationary"
     best_conf: float = 0.0
-    history: deque = field(default_factory=lambda: deque(maxlen=8))
+    # (cx, cy, box_h, dist_m, time) - distance is kept so closing speed can be
+    # measured without re-deriving it from the box height every frame.
+    history: deque = field(default_factory=lambda: deque(maxlen=10))
 
     @property
     def confirmed(self) -> bool:
@@ -79,6 +81,39 @@ class TrackedObject:
         # delay that matters when a person steps into the path.
         return (self.hits >= config.TRACK_MIN_HITS
                 or self.best_conf >= config.FAST_CONFIRM_CONF)
+
+    @property
+    def closing_speed(self) -> float | None:
+        """Metres per second this object is closing on the user.
+
+        Positive means approaching. Returns None when there is not enough
+        recent motion evidence, rather than guessing.
+        """
+        if len(self.history) < 3:
+            return None
+        first, last = self.history[0], self.history[-1]
+        d0, t0 = first[3], first[4]
+        d1, t1 = last[3], last[4]
+        if d0 is None or d1 is None:
+            return None
+        dt = t1 - t0
+        if dt < config.MOTION_MIN_SPAN:
+            return None
+        return (d0 - d1) / dt
+
+    @property
+    def time_to_collision(self) -> float | None:
+        """Seconds until contact at the current closing speed.
+
+        None when the object is not closing fast enough for the estimate to
+        mean anything - a stationary chair has no time to collision.
+        """
+        speed = self.closing_speed
+        if speed is None or speed <= config.CLOSING_MIN_SPEED:
+            return None
+        if self.dist_m is None:
+            return None
+        return max(0.0, self.dist_m / speed)
 
 
 @dataclass
@@ -303,10 +338,11 @@ class Vision:
 
             if best_id is not None and best_dist <= config.TRACK_MAX_DIST:
                 trk = self._tracks[best_id]
-                trk.history.append((det.cx, det.cy, det.h, now))
+                new_dist = estimate_distance(det.label, det.h, width)
+                trk.history.append((det.cx, det.cy, det.h, new_dist, now))
                 trk.x, trk.y = det.cx, det.cy
                 trk.box_h, trk.box_w = det.h, det.w
-                trk.dist_m = estimate_distance(det.label, det.h, width)
+                trk.dist_m = new_dist
                 trk.zone = zone_of(det.cx, width, trk.zone)
                 trk.hits += 1
                 trk.best_conf = max(trk.best_conf, det.conf)
@@ -316,13 +352,15 @@ class Vision:
             else:
                 tid = self._next_id
                 self._next_id += 1
+                new_dist = estimate_distance(det.label, det.h, width)
                 self._tracks[tid] = TrackedObject(
                     tid=tid, label=det.label, x=det.cx, y=det.cy,
                     box_h=det.h, box_w=det.w,
                     zone=zone_of(det.cx, width), hits=1, last_seen=now,
-                    dist_m=estimate_distance(det.label, det.h, width),
+                    dist_m=new_dist,
                     best_conf=det.conf,
-                    history=deque([(det.cx, det.cy, det.h, now)], maxlen=8))
+                    history=deque(
+                        [(det.cx, det.cy, det.h, new_dist, now)], maxlen=10))
                 matched.add(tid)
 
         for tid in [t for t, o in self._tracks.items()
@@ -331,16 +369,27 @@ class Vision:
 
 
 def _movement(trk: TrackedObject) -> str:
-    """Ported from detect_webcam.get_movement()."""
+    """Classify gross motion from the recent track history."""
     hist = trk.history
     if len(hist) < 4:
         return "stationary"
-    x0, y0, h0, _ = hist[0]
-    x1, y1, h1, _ = hist[-1]
+    first, last = hist[0], hist[-1]
+    x0, y0, h0, d0 = first[0], first[1], first[2], first[3]
+    x1, y1, h1, d1 = last[0], last[1], last[2], last[3]
     dx, dy = x1 - x0, y1 - y0
 
     if abs(dx) >= 35:
         return "left_to_right" if dx > 0 else "right_to_left"
+
+    # Prefer the distance signal when both ends have one: it is far less noisy
+    # than box-height growth.
+    if d0 is not None and d1 is not None:
+        change = d0 - d1
+        if change >= config.MOTION_MIN_CHANGE_M:
+            return "toward"
+        if change <= -config.MOTION_MIN_CHANGE_M:
+            return "away"
+
     if h0 > 0:
         growth = (h1 - h0) / h0
         if growth >= 0.18:

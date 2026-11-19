@@ -82,20 +82,61 @@ Full installation, wiring and troubleshooting: **[docs/DEPLOY.md](docs/DEPLOY.md
 
 ```
 smartcane/
-  __main__.py    entry point, threads, command dispatch
+  __main__.py    entry point, threads, command dispatch, conversation context
   config.py      every pin, port and threshold in one file
-  link.py        Arduino serial - auto-detects binary/JSON/CSV/key:value
-  camera.py      cv2 -> picamera2 -> synthetic fallback
-  vision.py      YOLO@320, zones with hysteresis, tracker, distance
-  guidance.py    state machine, step maths, announcement policy
+  link.py        Arduino serial - auto-detects baud + binary/JSON/CSV/key:value
+  camera.py      cv2 -> picamera2 -> network discovery -> synthetic fallback
+  vision.py      YOLO@320, zones with hysteresis, tracker, closing speed, TTC
+  risk.py        three-level risk engine (low / medium / critical)
+  guidance.py    decision layer: step maths, turns, bypass, STOP explanations
   asr.py         always-listening Vosk, restricted grammar, pre-roll buffer
   intent.py      rapidfuzz command matching (no LLM: too slow on a Pi 4)
   audio_out.py   single-owner speaker, priority queue, earcons, barge-in
 arduino/smartcane_sensor_hub/   sensor hub + hardware reflex
 tools/optimize_model.py         export to ncnn/ONNX (about 4x faster)
+tools/calibrate_stride.py       measure the user's own step length
+tools/benchmark.py              CPU-side decision-layer timing
 tests/smoke_test.py             hardware-free checks
+tests/scenarios.py              the twelve navigation scenarios
 docs/DEPLOY.md                  the guide to follow on the Pi
+docs/DEMO.md                    the demo script and contingencies
 ```
+
+## How it decides
+
+Risk is graded on evidence, not on object category. A car is not critical
+because it is a car; a chair is not harmless because it is furniture.
+
+| Level | Triggered by | Behaviour |
+|---|---|---|
+| **LOW** | visible, not in the corridor, or far away | named on request, never interrupts |
+| **MEDIUM** | in the walking corridor, or closing with TTC ≤ 4 s | warns and suggests a side |
+| **CRITICAL** | within 0.8 m in the path, TTC ≤ 1.5 s, or blocking the view with no distance | `Stop!` with object, distance and reason |
+
+Inputs: estimated distance, closing speed, time to collision, corridor overlap,
+frame-filling, and detection confidence. A weak detection is downgraded and
+spoken as "an unidentified obstacle" rather than trusted or invented.
+
+The ultrasonic is graded too, because it sees walls, doors and steps that COCO
+cannot name. A close reading with no matching camera object is still critical.
+
+## Voice commands
+
+| Ask | Get |
+|---|---|
+| "what is in front of me" | names up to three objects with side and distance |
+| "what objects are around me" | all three zones |
+| "how many steps" | step count, plus a turn if the way is blocked |
+| "how do I reach it" | steps to the object just described |
+| "guide me around it" | which side is clearer, and how many steps |
+| "which direction should I turn" | the side with more room |
+| "what is on my left" / "right" | what is detected there |
+| "have I passed it" | whether the object is still in view |
+| "is it safe" | clear / caution / not safe, with the reason |
+| "stop" | immediate silence |
+
+Stride length is calibrated per user, not assumed:
+`python tools/calibrate_stride.py`
 
 ## Measured performance (Raspberry Pi 4)
 

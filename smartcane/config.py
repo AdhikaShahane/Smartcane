@@ -1,4 +1,4 @@
-"""Central configuration for Sahayak Drishti.
+﻿"""Central configuration for Sahayak Drishti.
 
 Every hardware pin, port, threshold and tunable lives here. Nothing else in the
 package hard-codes a magic number, so the whole system can be retuned from one
@@ -124,6 +124,37 @@ TRACK_MIN_HITS = 2        # frames a track must exist before it may be announced
 # exactly the case that matters most: someone stepping into the path.
 FAST_CONFIRM_CONF = 0.65
 
+# ---------------------------------------------------------------------------
+# MOTION / TIME-TO-COLLISION
+# ---------------------------------------------------------------------------
+# Motion is measured from the track history, so it needs a real time span.
+MOTION_MIN_SPAN = 0.30    # s of history required before trusting a speed
+MOTION_MIN_CHANGE_M = 0.25  # distance change that counts as approaching/leaving
+CLOSING_MIN_SPEED = 0.25  # m/s below which "closing" is just noise
+# Time to collision thresholds. These are what turn a stationary classification
+# into a real risk: a car 6 m away doing 2 m/s is 3 s from you.
+TTC_CRITICAL_SEC = 1.5
+TTC_MEDIUM_SEC = 4.0
+
+# ---------------------------------------------------------------------------
+# RISK ESCALATION
+# ---------------------------------------------------------------------------
+# A detection this weak is not trusted to escalate risk on its own; it is
+# downgraded and reported as "unidentified".
+RISK_MIN_CONFIDENCE = 0.45
+# How much of the frame height an object must fill to count as blocking.
+RISK_BLOCKING_SIZE = 0.45
+# Corridor overlap above which an object counts as partially in the path.
+RISK_PATH_OVERLAP = 0.15
+
+# ---------------------------------------------------------------------------
+# STRIDE / STEP LENGTH
+# ---------------------------------------------------------------------------
+# User stride is calibrated, not assumed. tools/calibrate_stride.py writes
+# this file; STEP_DEFAULT is only a starting guess until that has been run.
+STRIDE_FILE = Path.home() / ".smartcane_stride"
+
+
 # ============================================================================
 # DISTANCE / STATE THRESHOLDS  (metres)
 # ============================================================================
@@ -140,7 +171,31 @@ STOP_MARGIN = 0.50        # body clearance subtracted before counting steps
 STEP_K = float(os.getenv("SMARTCANE_STEP_K", "0.45"))
 STEP_MIN, STEP_MAX = 0.30, 1.10
 STEP_DEFAULT = 0.65
-MAX_STEPS_TO_ANNOUNCE = 3
+
+
+def load_stride() -> float:
+    """Read the calibrated stride, or fall back to the population default.
+
+    Step counts are only meaningful if the stride is the user's own, so this
+    is deliberately a file the calibration tool writes rather than a constant.
+    """
+    try:
+        value = float(STRIDE_FILE.read_text(encoding="utf-8").strip())
+    except Exception:                                   # noqa: BLE001
+        return STEP_DEFAULT
+    if STEP_MIN <= value <= STEP_MAX:
+        return value
+    return STEP_DEFAULT
+
+
+STEP_M = load_stride()
+MAX_STEPS_TO_ANNOUNCE = 3     # guidance: never promise more path than verified
+MAX_STEPS_TO_REACH = 12       # reaching a named object may be further away
+# A side counts as usable only if nothing is detected closer than this.
+CLEARANCE_MIN_M = 1.2
+# How long a mentioned object stays "the thing we were talking about", so a
+# follow-up like "how do I reach it" refers back to it.
+CONTEXT_TTL_SEC = 30.0
 
 # ============================================================================
 # ANNOUNCEMENT POLICY
