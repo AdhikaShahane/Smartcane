@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Smoke tests that need no hardware.
 
 Run on the Pi or a laptop:
@@ -805,6 +805,49 @@ def test_stop_gives_an_exit() -> None:
     check("still leads with Stop", text3.startswith("Stop!"), text3)
 
 
+def test_sos() -> None:
+    """The panic alarm must never claim help that was not called.
+
+    This cane has no GPS. Saying "your location has been shared" would be a
+    lie told to a blind person in an emergency, who would then wait for help
+    that is not coming.
+    """
+    print("SOS panic button")
+    from smartcane.sos import SosAlarm, build_message
+
+    class NoGps:
+        gps_fix = 0
+        gps_lat = None
+        gps_lon = None
+
+    class WithGps:
+        gps_fix = 1
+        gps_lat = 18.5204
+        gps_lon = 73.8567
+
+    msg = build_message(NoGps())
+    check("says the location is unknown when there is no GPS",
+          "unknown" in msg.lower(), msg)
+    check("never claims a location was shared", "shared" not in msg.lower(),
+          msg)
+    check("never claims an alert was sent", "sent" not in msg.lower(), msg)
+    check("still asks for help", "help" in msg.lower(), msg)
+
+    gps_msg = build_message(WithGps())
+    check("reports real coordinates when a fix exists",
+          "18.520" in gps_msg, gps_msg)
+
+    alarm = SosAlarm()
+    check("alarm starts inactive", not alarm.active)
+    check("a press activates it", alarm.trigger(now=100.0) and alarm.active)
+    check("it is due immediately", alarm.due(now=100.0))
+    alarm.mark_spoken(now=100.0)
+    check("it does not repeat instantly", not alarm.due(now=101.0))
+    check("it repeats after the interval", alarm.due(now=100.0 + 7.0))
+    check("a second press cancels it", alarm.cancel() and not alarm.active)
+    check("no repeat once cancelled", not alarm.due(now=300.0))
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -834,6 +877,7 @@ def main() -> int:
     test_slow_segmentation_self_disables()
     test_naming_at_slow_frame_rate()
     test_stop_gives_an_exit()
+    test_sos()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")

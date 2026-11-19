@@ -15,6 +15,7 @@ from .camera import Camera
 from .guidance import (Guidance, Priority, State, _approx_distance, _round_half,
                        _with_article)
 from .link import SerialLink
+from .sos import SosAlarm, SosButton, build_message
 from .util import get_logger, resolve_audio_device, setup_logging
 from .vision import Vision
 
@@ -34,6 +35,10 @@ class SmartCane:
         self.asr = Asr(on_event=self.on_speech,
                        on_speech_start=self.on_speech_start,
                        mock=args.mock, device=args.mic)
+        # Panic button. Independent of everything else, so a stuck camera or a
+        # crashed detector can never stop it working.
+        self.sos = SosAlarm()
+        self.sos_button = SosButton(on_press=self._on_sos_press)
         self._last_query_at = 0.0
         self._fault_warned = False
         self._keyboard_mode = False
@@ -61,12 +66,18 @@ class SmartCane:
                 # keyboard so the rest of the system can still be shown.
                 self._use_keyboard("no microphone available")
 
+        self.sos_button.start()
+
         self.audio.say(config.STARTUP_GREETING, Priority.INFO, earcon="ok")
         log.info("ready - camera=%s serial=%s tts=%s vision=%s input=%s",
                  self.camera.backend, self.link.state().source,
                  self.audio.tts.backend,
                  "on" if self.vision.enabled else "off",
                  "keyboard" if self._keyboard_mode else "microphone")
+        if self.sos_button.available:
+            log.info("SOS button armed on GPIO %d", config.SOS_PIN)
+        else:
+            log.info("SOS: say or type 'sos' (no button detected)")
 
     def _use_keyboard(self, reason: str) -> None:
         log.warning("=" * 62)
@@ -88,6 +99,10 @@ class SmartCane:
 
     def stop(self) -> None:
         self.running = False
+        try:
+            self.sos_button.close()
+        except Exception:                               # noqa: BLE001
+            pass
         for part in (self.asr, self.vision, self.camera, self.link, self.audio):
             try:
                 part.stop()
@@ -108,6 +123,14 @@ class SmartCane:
         text = event.text.strip()
         if not text:
             return
+        # The panic word is checked before intent matching so it works even if
+        # the grammar does not recognise the rest of the sentence.
+        lowered = text.lower()
+        if "sos" in lowered or "emergency" in lowered:
+            log.warning("SOS triggered by speech")
+            self._on_sos_press()
+            return
+
         cmd, score, phrase = intent.classify(text)
         log.info("heard %r -> %s (%.0f) [%s]", text, cmd.value, score, phrase)
         if cmd is intent.Intent.UNKNOWN:
@@ -310,6 +333,35 @@ class SmartCane:
         except Exception:                               # noqa: BLE001
             return "Battery status is not available on this setup."
 
+    # -- SOS ---------------------------------------------------------------
+    def _on_sos_press(self) -> None:
+        """Button pressed: alarm on. Pressed again while active: cancel."""
+        if self.sos.cancel():
+            # In RPi.GPIO mode this is a second falling edge, i.e. a new press
+            # while the alarm is already running - treat it as "I am safe".
+            self.audio.say("Emergency alarm cancelled.", Priority.ANSWER)
+            log.warning("SOS cancelled by button")
+            return
+        now = time.monotonic()
+        self.sos.trigger(now)
+        # Interrupt whatever is being said. This is the one thing that may
+        # override an active warning.
+        self._speak_sos(now)
+
+    def _speak_sos(self, now: float | None = None) -> None:
+        text = build_message(self.link.state())
+        # REFLEX is the arbiter's top priority, so this preempts everything.
+        self.audio.say(text, Priority.REFLEX)
+        self.sos.mark_spoken(now)
+        log.warning("SOS: %s", text)
+
+    def _service_sos(self, sensor) -> None:
+        """Repeat the alarm while it is active. Called every loop tick."""
+        if not self.sos.active:
+            return
+        if self.sos.due():
+            self._speak_sos()
+
     # -- main loop ---------------------------------------------------------
     def run(self) -> None:
         last_log = 0.0
@@ -317,6 +369,7 @@ class SmartCane:
             while self.running:
                 sensor = self.link.state()
                 scene = self.vision.scene()
+                self._service_sos(sensor)
                 sit = self.guidance.assess(sensor, scene)
                 ann = self.guidance.announce(sit, scene=scene)
                 if ann is not None:
