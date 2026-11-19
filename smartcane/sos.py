@@ -210,8 +210,14 @@ class SosAlarm:
         return True
 
     def due(self, now: float | None = None) -> bool:
-        """Has enough time passed that the alarm should sound again?"""
+        """Has enough time passed that the alarm should sound again?
+
+        With SOS_REPEAT_SEC at 0 - the default - this always returns False:
+        one press says the alarm once and then stays quiet.
+        """
         if not self.active:
+            return False
+        if config.SOS_REPEAT_SEC <= 0:
             return False
         now = now if now is not None else time.monotonic()
         return (now - self._last_spoken) >= config.SOS_REPEAT_SEC

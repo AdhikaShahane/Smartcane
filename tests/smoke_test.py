@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Smoke tests that need no hardware.
 
 Run on the Pi or a laptop:
@@ -826,26 +826,47 @@ def test_sos() -> None:
         gps_lon = 73.8567
 
     msg = build_message(NoGps())
-    check("says the location is unknown when there is no GPS",
-          "unknown" in msg.lower(), msg)
+    check("the default alarm says nothing about location",
+          "location" not in msg.lower(), msg)
     check("never claims a location was shared", "shared" not in msg.lower(),
           msg)
     check("never claims an alert was sent", "sent" not in msg.lower(), msg)
     check("still asks for help", "help" in msg.lower(), msg)
 
-    gps_msg = build_message(WithGps())
-    check("reports real coordinates when a fix exists",
-          "18.520" in gps_msg, gps_msg)
+    # The {location} placeholder is still supported for anyone who fits a GPS.
+    import smartcane.config as cfg
+    old_template = cfg.SOS_MESSAGE
+    try:
+        cfg.SOS_MESSAGE = "Emergency. {location}"
+        gps_msg = build_message(WithGps())
+        check("a GPS template still reports real coordinates",
+              "18.520" in gps_msg, gps_msg)
+    finally:
+        cfg.SOS_MESSAGE = old_template
 
-    alarm = SosAlarm()
-    check("alarm starts inactive", not alarm.active)
-    check("a press activates it", alarm.trigger(now=100.0) and alarm.active)
-    check("it is due immediately", alarm.due(now=100.0))
-    alarm.mark_spoken(now=100.0)
-    check("it does not repeat instantly", not alarm.due(now=101.0))
-    check("it repeats after the interval", alarm.due(now=100.0 + 7.0))
-    check("a second press cancels it", alarm.cancel() and not alarm.active)
-    check("no repeat once cancelled", not alarm.due(now=300.0))
+    old_repeat = cfg.SOS_REPEAT_SEC
+    try:
+        # Default: one press, one announcement.
+        cfg.SOS_REPEAT_SEC = 0.0
+        once = SosAlarm()
+        once.trigger(now=100.0)
+        check("by default the alarm never repeats",
+              not once.due(now=100.0) and not once.due(now=500.0),
+              "it repeated")
+
+        # Repeating is available, but only when asked for.
+        cfg.SOS_REPEAT_SEC = 6.0
+        alarm = SosAlarm()
+        alarm.trigger(now=100.0)
+        check("the first announcement is immediate", alarm.due(now=100.0))
+        alarm.mark_spoken(now=100.0)
+        check("no repeat before the interval", not alarm.due(now=101.0))
+        check("repeats after the interval if configured",
+              alarm.due(now=107.5))
+        check("a press cancels it", alarm.cancel() and not alarm.active)
+        check("no repeat once cancelled", not alarm.due(now=300.0))
+    finally:
+        cfg.SOS_REPEAT_SEC = old_repeat
 
     # Contact bounce must never toggle the alarm off. A cheap button chatters
     # for tens of milliseconds, and a second edge CANCELS - the worst possible
@@ -882,7 +903,8 @@ def test_demo_mode() -> None:
     try:
         cfg.DEMO_MODE = False
         honest = build_message(NoGps())
-        check("honest by default", "unknown" in honest.lower(), honest)
+        check("default says nothing about location",
+              "location" not in honest.lower(), honest)
         check("no demo claim by default", "shared" not in honest.lower(),
               honest)
 

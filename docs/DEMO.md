@@ -168,9 +168,11 @@ python -m smartcane --camera "http://<phone-ip>:8080/video" --mic 1 --demo
 Startup prints a banner saying the alarm is simulated. Then either press the
 button (GPIO 17 to GND) or say **"sos"**.
 
-What the audience hears, every 6 seconds until cancelled:
+What the audience hears, once per press:
 
 > "Emergency! S O S button pressed. Your live location has been shared."
+
+Press again to cancel - it says "Emergency alarm cancelled." and goes quiet.
 
 Say it once, then explain the honest position:
 
@@ -180,8 +182,12 @@ Say it once, then explain the honest position:
 > real position, and we have already left the message honest for the case
 > where no fix is available."
 
-Without `--demo` the same button is truthful instead:
+Without `--demo` the same button says:
 
-> "Emergency! I need help. My location is unknown."
+> "Emergency! S O S button pressed. I need help."
+
+It makes no claim about location either way, so nothing said in either mode is
+false. To repeat the alarm every few seconds, set
+`SMARTCANE_SOS_REPEAT=6` - it is off by default.
 
 If a judge asks which is which: **`--demo` simulates, the default does not.**

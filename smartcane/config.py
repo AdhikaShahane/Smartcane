@@ -444,9 +444,9 @@ STARTUP_GREETING = "Sahayak Drishti ready."
 SOS_ENABLED = os.getenv("SMARTCANE_SOS", "1").strip() not in ("0", "off", "no")
 SOS_PIN = int(os.getenv("SMARTCANE_SOS_PIN", "17"))
 SOS_BOUNCE_SEC = 0.06        # ignore contact chatter from a cheap button
-# How often to repeat the alarm while it is active. A blind user cannot see
-# that help is on the way, so silence looks like failure.
-SOS_REPEAT_SEC = 6.0
+# 0 (the default) means say it ONCE per press and then stay quiet. Set this to
+# a number of seconds only if you want a repeating siren.
+SOS_REPEAT_SEC = float(os.getenv("SMARTCANE_SOS_REPEAT", "0"))
 # Hold the button this long to cancel the alarm.
 SOS_CANCEL_HOLD_SEC = 1.5
 # Two presses closer together than this are treated as one. Without it, a
@@ -458,9 +458,12 @@ SOS_DEBOUNCE_SEC = 0.8
 # is honest: without a GPS fix it says so rather than claiming anything was
 # sent. Override the whole line with SMARTCANE_SOS_MESSAGE if you have your own
 # notification system wired up.
+# {location} may be used if you fit a GPS module, but it is deliberately NOT
+# in the default sentence: announcing "my location is unknown" adds words and
+# tells the user nothing they can act on.
 SOS_MESSAGE = os.getenv(
     "SMARTCANE_SOS_MESSAGE",
-    "Emergency! I need help. {location}")
+    "Emergency! S O S button pressed. I need help.")
 
 # ---------------------------------------------------------------------------
 # DEMO MODE
