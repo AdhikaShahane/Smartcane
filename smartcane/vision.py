@@ -1,4 +1,4 @@
-﻿"""Object detection, zone classification and tracking.
+"""Object detection, zone classification and tracking.
 
 The zone/hysteresis and movement-analysis logic is ported from
 `detect_webcam.py` (Ishwari's engine) because it was the strongest part of the
@@ -314,6 +314,7 @@ class Vision:
         self.seg = SegDetector()
         self.backend = "none"
         self.enabled = False
+        self._seg_times: deque = deque(maxlen=8)
         self._scene = Scene()
         self._lock = threading.Lock()
         self._thread: StoppableThread | None = None
@@ -324,7 +325,7 @@ class Vision:
         if self.mock:
             self.enabled = False
             self.backend = "none"
-        elif self.seg.load():
+        elif config.SEG_MODE != "off" and self.seg.load():
             self.backend = "segmentation"
             self.enabled = True
         elif self.detector.load():
@@ -333,8 +334,11 @@ class Vision:
             # walls or stairs, so it is a degraded mode by definition.
             self.backend = "detection(legacy)"
             self.enabled = True
-            log.warning("falling back to COCO detection: doors, walls and "
-                        "stairs will NOT be recognised")
+            if config.SEG_MODE == "off":
+                log.info("segmentation disabled by SMARTCANE_SEG=off")
+            else:
+                log.warning("falling back to COCO detection: doors, walls and "
+                            "stairs will NOT be recognised")
         else:
             self.enabled = False
             self.backend = "none"
@@ -342,6 +346,31 @@ class Vision:
             log.warning("vision disabled - ultrasonic-only mode")
         self._thread = _VisionLoop(self)
         self._thread.start()
+
+    def _disable_segmentation(self, avg_ms: float) -> None:
+        """Give up on segmentation when it is too slow to be useful."""
+        log.warning("=" * 60)
+        log.warning("SEGMENTATION IS TOO SLOW: %.0f ms per frame "
+                    "(budget %.0f ms)", avg_ms, config.SEG_MAX_MS)
+        log.warning("Switching to the detector. The cane keeps working, but")
+        log.warning("doors, walls and stairs will NOT be recognised.")
+        log.warning("To avoid this next time, lower the resolution:")
+        log.warning("    SMARTCANE_SEG_SIZE=192   or use the smaller B0 model")
+        log.warning("=" * 60)
+        try:
+            if self.seg is not None:
+                self.seg.session = None
+                self.seg.model = None
+                self.seg.backend = "none"
+        except Exception:                               # noqa: BLE001
+            pass
+        self.seg = None
+        if self.detector.load():
+            self.backend = "detection(legacy)"
+            self.enabled = True
+        else:
+            self.backend = "none"
+            self.enabled = False
 
     def stop(self) -> None:
         if self._thread:
@@ -384,6 +413,17 @@ class Vision:
             detections: list[Detection] = []
         elif self.backend == "segmentation":
             detections, free_space = self._from_segmentation(image)
+            # Watch our own cost. A model that takes seconds per frame is
+            # worse than useless: the cane goes blind between updates and the
+            # user has no idea why. Degrade automatically and say so once.
+            seg_ms = (time.monotonic() - started) * 1000.0
+            self._seg_times.append(seg_ms)
+            if len(self._seg_times) > config.SEG_WARMUP_FRAMES:
+                recent = list(self._seg_times)[-5:]
+                avg = sum(recent) / len(recent)
+                if avg > config.SEG_MAX_MS:
+                    self._disable_segmentation(avg)
+                    detections, free_space = [], None
         else:
             detections = self.detector.detect(image)
 

@@ -1,4 +1,4 @@
-"""Central configuration for Sahayak Drishti.
+﻿"""Central configuration for Sahayak Drishti.
 
 Every hardware pin, port, threshold and tunable lives here. Nothing else in the
 package hard-codes a magic number, so the whole system can be retuned from one
@@ -230,6 +230,19 @@ NAMED_NAMES = allowed_names()
 # Tried in order; the first that exists wins. tools/fetch_model.py downloads
 # the pretrained ADE20K semantic model, or you train your own with
 # tools/train_segmentation.py.
+# onnx  : use the ADE20K SegFormer model (accurate, slow on a Pi 4)
+# yolo  : use a custom-trained segmentation checkpoint
+# off   : never run segmentation; use the COCO/YOLO detector
+# auto  : onnx/yolo if a model exists, otherwise the detector
+SEG_MODE = os.getenv("SMARTCANE_SEG", "auto").strip().lower()
+
+# If segmentation averages slower than this, the system switches itself to
+# the detector and says so. 3.5 s/frame was measured on a Pi 4 with
+# SegFormer-B1 at 512x512 - unusable, and the user should not have to read a
+# log to discover that.
+SEG_MAX_MS = float(os.getenv("SMARTCANE_SEG_MAX_MS", "1200"))
+SEG_WARMUP_FRAMES = 3
+
 SEG_MODEL_CANDIDATES = [
     MODEL_DIR / "segformer-ade20k.onnx",      # what fetch_model.py downloads
     MODEL_DIR / "ade20k-seg.onnx",
@@ -239,7 +252,7 @@ SEG_MODEL_CANDIDATES = [
 SEG_IMGSZ = 256           # segmentation is heavier than detection; 256 is the
                           # sweet spot on a Pi 4
 # SegFormer is fixed at the resolution it was fine-tuned on.
-SEG_INPUT_SIZE = int(os.getenv("SMARTCANE_SEG_SIZE", "512"))
+SEG_INPUT_SIZE = int(os.getenv("SMARTCANE_SEG_SIZE", "256"))
 SEG_CONF = 0.30
 # A coarse occupancy grid turns the mask into "can I walk here" cheaply.
 GRID_W, GRID_H = 15, 12   # 15 divides into three equal 5-column zones

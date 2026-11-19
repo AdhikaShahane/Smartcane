@@ -1,4 +1,4 @@
-"""Arduino sensor-hub link.
+﻿"""Arduino sensor-hub link.
 
 Reads the microcontroller's serial stream and publishes a `SensorState`.
 
@@ -344,9 +344,11 @@ class SerialLink:
                     self._apply_kv(text)
                 else:
                     self._apply_csv(text)
-            except Exception as exc:                    # noqa: BLE001
+            except Exception:                           # noqa: BLE001
+                # No logging here: this is the per-frame hot path and a bad
+                # baud rate would emit thousands of lines a second. The
+                # rate-limited warning in _apply_kv covers diagnosis.
                 self._record_frame(False)
-                log.debug("bad frame %r: %s", text, exc)
 
     def _apply_json(self, text: str) -> None:
         obj = json.loads(text)
@@ -425,14 +427,10 @@ class SerialLink:
                     "would reject these cleanly.",
                     self._discard_count, text.strip()[:60])
                 self._discard_logged_at = now
-            if not self._state.reliable:
-                log.debug("serial link unreliable - ultrasonic ignored")
             return
 
         if not self._accept_distance(dist):
             self._record_frame(False)
-            log.debug("outlier rejected: %.1f cm vs median of %s",
-                      dist, [round(v) for v in self._accepted])
             return
 
         self._record_frame(True)

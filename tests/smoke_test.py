@@ -681,6 +681,50 @@ def test_serial_trust() -> None:
           not _looks_like_our_text(bytes([0xAA, 0x55, 1, 4, 7, 0x2C, 1, 0])))
 
 
+def test_slow_segmentation_self_disables() -> None:
+    """A model too slow to be useful must disable itself and say so.
+
+    Measured on the Pi: SegFormer-B1 at 512x512 took 3517 ms per frame, i.e.
+    0.28 fps. A blind user gets no feedback for three seconds at a time, which
+    is worse than having no segmentation at all.
+    """
+    print("slow segmentation self-disables")
+    import time as _time
+
+    import numpy as np
+    import smartcane.config as cfg
+    from smartcane.vision import Vision
+
+    class FakeCam:
+        def latest(self):
+            return None
+
+    class SlowSeg:
+        backend = "fake"
+        session = None
+        model = None
+
+        def infer(self, image):
+            _time.sleep(0.02)
+            return None
+
+    old_max, old_warm = cfg.SEG_MAX_MS, cfg.SEG_WARMUP_FRAMES
+    try:
+        cfg.SEG_MAX_MS = 0.5          # force the trigger with a 20 ms model
+        cfg.SEG_WARMUP_FRAMES = 1
+        vision = Vision(FakeCam(), mock=False)
+        vision.enabled = True
+        vision.backend = "segmentation"
+        vision.seg = SlowSeg()
+        frame = np.zeros((120, 160, 3), np.uint8)
+        for _ in range(8):
+            vision.process(frame)
+        check("segmentation switched off when too slow",
+              vision.backend != "segmentation", vision.backend)
+    finally:
+        cfg.SEG_MAX_MS, cfg.SEG_WARMUP_FRAMES = old_max, old_warm
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -707,6 +751,7 @@ def main() -> int:
     test_earcons()
     test_serial_parsers()
     test_serial_trust()
+    test_slow_segmentation_self_disables()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")
