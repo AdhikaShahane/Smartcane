@@ -103,8 +103,11 @@ if [ -n "$EXTRA" ]; then
 fi
 
 # Only request groups that exist. systemd refuses to start a unit whose
-# SupplementaryGroups names a group the system does not have, which would look
-# like a code fault.
+# Group= or SupplementaryGroups= names a group the system does not have, and
+# reports it as the cryptic "status=216/GROUP", which looks like a code fault.
+#
+# Group= is left OUT entirely: systemd then uses the user's primary group,
+# which is always correct. Naming a group explicitly only adds a way to break.
 GROUPS_LIST=""
 for g in audio video gpio dialout plugdev; do
     if getent group "$g" > /dev/null 2>&1; then
@@ -134,7 +137,6 @@ StartLimitIntervalSec=120
 [Service]
 Type=simple
 User=${RUN_USER}
-Group=${RUN_USER}
 ${GROUPS_LINE}
 WorkingDirectory=${REPO_DIR}
 Environment=PYTHONUNBUFFERED=1
