@@ -1,4 +1,4 @@
-"""Entry point: wire the threads together and run the decision loop."""
+﻿"""Entry point: wire the threads together and run the decision loop."""
 from __future__ import annotations
 
 import argparse
@@ -495,6 +495,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="type commands instead of speaking them "
                         "(use this if the microphone will not work)")
     p.add_argument("--mute", action="store_true", help="print instead of speak")
+    p.add_argument("--demo", action="store_true",
+                   help="SIMULATE location sharing in the SOS alarm (for "
+                        "presentations only; nothing is actually sent)")
     p.add_argument("--camera", default=config.CAMERA_SOURCE,
                    help="auto | 0 | picamera2 | http://phone:8080/video")
     p.add_argument("--dump-serial", action="store_true",
@@ -517,6 +520,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging("DEBUG" if args.verbose else config.LOG_LEVEL)
+
+    if getattr(args, "demo", False):
+        config.DEMO_MODE = True
+    if config.DEMO_MODE:
+        log.warning("=" * 68)
+        log.warning("DEMO MODE - the SOS alarm SIMULATES location sharing.")
+        log.warning("No coordinates are read, computed or transmitted, and no")
+        log.warning("message reaches anyone. The spoken sentence describes a")
+        log.warning("feature this build does not have yet.")
+        log.warning("Do not show this mode to a real user as a working alarm.")
+        log.warning("=" * 68)
 
     if args.list_audio:
         try:

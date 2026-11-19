@@ -156,3 +156,33 @@ python -m smartcane --mock --verbose
 > urgent â†’ stop, and it only speaks when the state changes."
 
 That demonstrates the entire decision layer without touching a cable.
+
+## SOS button � demo step
+
+Run with the demo flag so the alarm narrates the finished behaviour:
+
+```bash
+python -m smartcane --camera "http://<phone-ip>:8080/video" --mic 1 --demo
+```
+
+Startup prints a banner saying the alarm is simulated. Then either press the
+button (GPIO 17 to GND) or say **"sos"**.
+
+What the audience hears, every 6 seconds until cancelled:
+
+> "Emergency! S O S activated. Your location has been shared with your
+> emergency contact."
+
+Say it once, then explain the honest position:
+
+> "This build has no GPS module, so this is a simulation of the alert flow.
+> The logic and the wiring are real; the coordinates are the part that is
+> still missing. Adding a NEO-6M module would make the same button send a
+> real position, and we have already left the message honest for the case
+> where no fix is available."
+
+Without `--demo` the same button is truthful instead:
+
+> "Emergency! I need help. My location is unknown."
+
+If a judge asks which is which: **`--demo` simulates, the default does not.**

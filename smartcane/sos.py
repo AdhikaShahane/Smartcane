@@ -1,4 +1,4 @@
-"""Panic button: one press, loud alarm, repeat until cancelled.
+﻿"""Panic button: one press, loud alarm, repeat until cancelled.
 
 Wiring
 ------
@@ -43,7 +43,14 @@ def location_sentence(sensor) -> str:
 
 
 def build_message(sensor) -> str:
-    """The full alarm sentence, never claiming anything untrue."""
+    """The full alarm sentence.
+
+    In demo mode this returns the simulated "location shared" line, which the
+    product would only be able to say once a real GPS and a real notification
+    channel were fitted. Outside demo mode it never claims anything untrue.
+    """
+    if config.DEMO_MODE:
+        return config.SOS_DEMO_MESSAGE
     location = location_sentence(sensor)
     try:
         return config.SOS_MESSAGE.format(location=location)

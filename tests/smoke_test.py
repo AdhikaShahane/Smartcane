@@ -848,6 +848,42 @@ def test_sos() -> None:
     check("no repeat once cancelled", not alarm.due(now=300.0))
 
 
+def test_demo_mode() -> None:
+    """Demo mode simulates location sharing, and only demo mode may.
+
+    The demo exists to show what the finished product would do. The risk is
+    that a simulated alarm gets shown to a real user, so the switch is
+    explicit, logged loudly at startup, and off unless asked for.
+    """
+    print("demo mode")
+    import smartcane.config as cfg
+    from smartcane.sos import build_message
+
+    class NoGps:
+        gps_fix = 0
+        gps_lat = None
+        gps_lon = None
+
+    old = cfg.DEMO_MODE
+    try:
+        cfg.DEMO_MODE = False
+        honest = build_message(NoGps())
+        check("honest by default", "unknown" in honest.lower(), honest)
+        check("no demo claim by default", "shared" not in honest.lower(),
+              honest)
+
+        cfg.DEMO_MODE = True
+        demo = build_message(NoGps())
+        check("demo simulates sharing", "shared" in demo.lower(), demo)
+        check("demo names who it went to", "contact" in demo.lower(), demo)
+        check("demo is still an emergency line",
+              "emergency" in demo.lower(), demo)
+    finally:
+        cfg.DEMO_MODE = old
+
+    check("demo mode is off unless asked", old is False, str(old))
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -878,6 +914,7 @@ def main() -> int:
     test_naming_at_slow_frame_rate()
     test_stop_gives_an_exit()
     test_sos()
+    test_demo_mode()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")

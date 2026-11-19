@@ -457,3 +457,22 @@ SOS_CANCEL_HOLD_SEC = 1.5
 SOS_MESSAGE = os.getenv(
     "SMARTCANE_SOS_MESSAGE",
     "Emergency! I need help. {location}")
+
+# ---------------------------------------------------------------------------
+# DEMO MODE
+# ---------------------------------------------------------------------------
+# With no GPS fitted, the honest alarm says "my location is unknown". That is
+# correct but it does not demonstrate the intended product, so the demo can
+# instead *simulate* the finished behaviour.
+#
+# This is a presentation switch, nothing more. In demo mode no coordinates are
+# read, computed or transmitted; the sentence is simply spoken as if a real
+# alert had gone out. It is worth knowing that, because a demo of a safety
+# feature is exactly the kind of thing that gets shown to a real user later.
+DEMO_MODE = os.getenv("SMARTCANE_DEMO", "0").strip().lower() not in (
+    "", "0", "off", "no", "false")
+
+SOS_DEMO_MESSAGE = os.getenv(
+    "SMARTCANE_SOS_DEMO_MESSAGE",
+    "Emergency! S O S activated. Your location has been shared with your "
+    "emergency contact.")
