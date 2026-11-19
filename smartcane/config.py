@@ -29,7 +29,7 @@ SERIAL_STALE_SEC = 1.0
 CAMERA_SOURCE = os.getenv("SMARTCANE_CAMERA", "auto")
 CAM_WIDTH = 640
 CAM_HEIGHT = 480
-CAM_FPS = 30
+CAM_FPS = int(os.getenv("SMARTCANE_CAM_FPS", "15"))   # see note below
 CAM_STALE_SEC = 1.0
 # The phone's IP changes on DHCP after every reboot, so remember the last URL
 # that worked and re-discover it automatically when it stops responding.
@@ -43,7 +43,7 @@ CAMERA_SCAN_TIMEOUT = 0.25
 YOLO_IMGSZ = 320          # 320 is ~4x faster than 640 on a Pi 4. Do not raise.
 YOLO_CONF = 0.35          # lower = catches more objects, more false positives
 YOLO_IOU = 0.45
-DETECT_FPS = 8            # inference target; tracking fills the gaps
+DETECT_FPS = int(os.getenv("SMARTCANE_DETECT_FPS", "8"))  # inference target; tracking fills the gaps
 
 # Pinhole focal length in pixels for the captured width (Pi Camera v1.3 OV5647,
 # 3.6 mm lens, 3.76 mm sensor width -> f_px = 3.6/3.76 * 640 ~= 613).
