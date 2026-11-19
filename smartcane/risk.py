@@ -111,7 +111,9 @@ def assess_object(obj: TrackedObject, scene: Scene,
     closing = obj.closing_speed
     ttc = obj.time_to_collision
 
-    risk = Risk(level=RiskLevel.LOW, label=obj.label, dist_m=dist,
+    # spoken_label collapses an unstable or off-profile label to "obstacle",
+    # so a flickering class never gets announced as fact.
+    risk = Risk(level=RiskLevel.LOW, label=obj.spoken_label, dist_m=dist,
                 zone=obj.zone, in_path=in_path, overlap=overlap,
                 closing_speed=closing, ttc=ttc, confidence=confidence,
                 size_ratio=size_ratio, uncertain=uncertain, source=source)

@@ -1,4 +1,4 @@
-﻿# Sahayak Drishti â€” AI Smart Cane
+# Sahayak Drishti â€” AI Smart Cane
 
 An assistive navigation system for visually impaired users. A Raspberry Pi 4
 runs the perception and speech stack; an Arduino Uno streams ultrasonic
@@ -154,6 +154,40 @@ there whether or not the model can name it.
 
 Stride length is calibrated per user, not assumed:
 `python tools/calibrate_stride.py`
+
+## How often it talks
+
+Continuous alerts are how an assistive device gets switched off. The default
+is **silent unless it matters**:
+
+| `SMARTCANE_ALERTS` | Behaviour |
+|---|---|
+| `critical` *(default)* | speaks only for a stop-level hazard, or anything within **1.0 m**. Everything else waits to be asked |
+| `medium` | also warns about things blocking the path |
+| `all` | full proactive guidance |
+
+Direct questions (*"what is in front of me"*, *"is it safe"*) are **always**
+answered, in every mode.
+
+## What it is allowed to name
+
+A classroom does not contain a jet ski. Naming every class the model can emit
+is how you get "microwave" shouted at a seated person.
+
+```bash
+SMARTCANE_ENV=indoor    # default: classroom, lab, corridor, home
+SMARTCANE_ENV=outdoor   # street, pavement, campus
+SMARTCANE_ENV=all       # no filtering
+```
+
+The profile only controls **naming**. Anything off-profile is still treated as
+an obstacle — it is physically there — it is simply spoken as *"an obstacle"*.
+
+Separately, a name must be **earned** before it is spoken: at least 3 agreeing
+frames and a 60% majority. A label that flickers between classes is reported as
+*"an unidentified obstacle"* rather than guessed. The tracker matches on
+position, not label, so one misclassified frame cannot create a second
+phantom object.
 
 ## Measured performance (Raspberry Pi 4)
 

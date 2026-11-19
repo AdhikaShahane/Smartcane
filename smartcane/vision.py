@@ -1,4 +1,4 @@
-"""Object detection, zone classification and tracking.
+﻿"""Object detection, zone classification and tracking.
 
 The zone/hysteresis and movement-analysis logic is ported from
 `detect_webcam.py` (Ishwari's engine) because it was the strongest part of the
@@ -72,9 +72,28 @@ class TrackedObject:
     dist_m: float | None
     movement: str = "stationary"
     best_conf: float = 0.0
+    label_stable: bool = False
+    # Vote history for the label. A segmentation model flickers between
+    # classes on the same object; naming the first frame it sees is how you end
+    # up shouting "microwave" at a seated person.
+    label_votes: dict = field(default_factory=dict)
     # (cx, cy, box_h, dist_m, time) - distance is kept so closing speed can be
     # measured without re-deriving it from the box height every frame.
     history: deque = field(default_factory=lambda: deque(maxlen=10))
+
+    @property
+    def spoken_label(self) -> str:
+        """The name we are willing to say out loud.
+
+        Empty of confidence, out of the environment profile, or still
+        flickering: all become "obstacle". It is still an obstacle - it simply
+        does not get a name it has not earned.
+        """
+        if not self.label_stable:
+            return "obstacle"
+        if self.label not in config.NAMED_NAMES:
+            return "obstacle"
+        return self.label
 
     @property
     def confirmed(self) -> bool:
@@ -276,6 +295,17 @@ class Detector:
         return out
 
 
+def _stable_label(votes: dict) -> tuple[str, bool]:
+    """Majority label, and whether it has earned the right to be spoken."""
+    if not votes:
+        return "obstacle", False
+    label, count = max(votes.items(), key=lambda kv: kv[1])
+    total = sum(votes.values())
+    stable = (count >= config.LABEL_MIN_VOTES
+              and (count / float(total)) >= config.LABEL_MIN_SHARE)
+    return label, stable
+
+
 class Vision:
     def __init__(self, camera, mock: bool = False) -> None:
         self.camera = camera
@@ -381,7 +411,10 @@ class Vision:
         for det in detections:
             best_id, best_dist = None, float("inf")
             for tid, trk in self._tracks.items():
-                if tid in matched or trk.label != det.label:
+                # Position only. Matching on the label meant a single
+                # misclassified frame created a second track for the same
+                # object, and both of them could then be announced.
+                if tid in matched:
                     continue
                 if now - trk.last_seen > config.TRACK_MAX_AGE:
                     continue
@@ -391,6 +424,8 @@ class Vision:
 
             if best_id is not None and best_dist <= config.TRACK_MAX_DIST:
                 trk = self._tracks[best_id]
+                trk.label_votes[det.label] = trk.label_votes.get(det.label, 0) + 1
+                trk.label, trk.label_stable = _stable_label(trk.label_votes)
                 new_dist = estimate_distance(det.label, det.h, width)
                 trk.history.append((det.cx, det.cy, det.h, new_dist, now))
                 trk.x, trk.y = det.cx, det.cy
@@ -412,6 +447,8 @@ class Vision:
                     zone=zone_of(det.cx, width), hits=1, last_seen=now,
                     dist_m=new_dist,
                     best_conf=det.conf,
+                    label_votes={det.label: 1},
+                    label_stable=False,
                     history=deque(
                         [(det.cx, det.cy, det.h, new_dist, now)], maxlen=10))
                 matched.add(tid)

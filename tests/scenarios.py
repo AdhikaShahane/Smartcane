@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Scenario tests for the risk engine and navigation planner.
 
 These are the twelve scenarios from the specification. Each one builds a
@@ -54,7 +54,8 @@ def make_object(label: str, zone: str, dist: float, conf: float = 0.9,
     obj = TrackedObject(tid=1, label=label, x=cx, y=240, box_h=box_h,
                         box_w=box_h * 0.6, zone=zone, hits=5,
                         last_seen=approach_seconds, dist_m=dist,
-                        best_conf=conf)
+                        best_conf=conf, label_stable=True,
+                        label_votes={label: 5})
     start = approach_from if approach_from is not None else dist
     steps = 5
     for i in range(steps):

@@ -198,16 +198,40 @@ class Guidance:
         return sit
 
     # -- announcement ------------------------------------------------------
+    def _may_speak(self, sit: Situation) -> bool:
+        """Is this situation worth interrupting the user for?
+
+        Continuous alerts are how an assistive device gets switched off. In
+        the default "critical" mode the cane is silent unless something is
+        genuinely a stop-level hazard, or the user asked a question. Everything
+        else waits to be asked.
+        """
+        mode = config.UNSOLICITED_ALERTS
+        if mode == "all":
+            return True
+        if mode == "medium":
+            return sit.state in (State.ADVISORY, State.URGENT, State.STOP)
+        # critical: a stop-level hazard, OR anything physically this close.
+        # The distance test matters because a 0.9 m obstacle can still grade as
+        # ADVISORY, and staying silent at arm's length would be wrong.
+        if sit.state in (State.URGENT, State.STOP):
+            return True
+        return (sit.dist_m is not None
+                and sit.dist_m <= config.ALERT_DISTANCE_M)
+
     def announce(self, sit: Situation, now: float | None = None,
                  scene=None) -> Announcement | None:
         """Return words only when the situation has meaningfully changed."""
         now = now if now is not None else time.monotonic()
+        may_speak = self._may_speak(sit)
 
         if sit.state in (State.CLEAR, State.WATCH):
             if self._state in (State.ADVISORY, State.URGENT, State.STOP):
                 self._clear_since = now
                 self._clear_announced = False
             self._state = sit.state
+            if not may_speak:
+                return None
             # Reassure once, and only after a genuinely quiet period, so a
             # hazard that just cleared is not immediately overwritten.
             if (self._clear_since is not None and not self._clear_announced
@@ -237,7 +261,7 @@ class Guidance:
         else:
             cooled = (now - self._last_hazard_at) >= config.ANNOUNCE_COOLDOWN_SEC
 
-        if not changed or not cooled:
+        if not may_speak or not changed or not cooled:
             self._state = sit.state
             self._last_key = key
             return None

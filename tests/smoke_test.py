@@ -536,10 +536,106 @@ def test_multi_object_and_turns() -> None:
     print(f"    \"{clear}\"")
 
 
+def _scene_with(*specs):
+    """Build a Scene from (label, zone, dist_m, conf) tuples."""
+    import time
+    from smartcane.vision import Scene, TrackedObject
+
+    now = time.monotonic()
+    scene = Scene(at=now)
+    for index, (label, zone, dist, conf) in enumerate(specs):
+        scene.objects.append(TrackedObject(
+            tid=index + 1, label=label, x=320.0 if zone == "center" else
+            (100.0 if zone == "left" else 540.0), y=240, box_h=100, box_w=60,
+            zone=zone, hits=5, last_seen=now, dist_m=dist, best_conf=conf,
+            label_stable=True, label_votes={label: 5}))
+    return scene
+
+
+def test_quiet_by_default() -> None:
+    """The cane must NOT chatter. Only close hazards, or a direct question.
+
+    This is the complaint that matters most in practice: continuous alerts make
+    the device get switched off. Default mode is "critical".
+    """
+    print("quiet by default")
+    import smartcane.config as cfg
+
+    check("default mode is critical", cfg.UNSOLICITED_ALERTS == "critical",
+          cfg.UNSOLICITED_ALERTS)
+
+    g = Guidance(step_len=0.65)
+    far = _scene_with(("chair", "center", 1.5, 0.9))
+    sit = g.assess(FakeSensor(1.5), far)
+    ann = g.announce(sit, now=100.0, scene=far)
+    check("1.5 m ahead stays silent", ann is None,
+          ann.text if ann else "silent")
+
+    far2 = _scene_with(("person", "center", 2.0, 0.9))
+    sit2 = g.assess(FakeSensor(2.0), far2)
+    ann2 = g.announce(sit2, now=150.0, scene=far2)
+    check("2.0 m ahead stays silent", ann2 is None,
+          ann2.text if ann2 else "silent")
+
+    close = _scene_with(("chair", "center", 0.9, 0.9))
+    sit3 = g.assess(FakeSensor(0.9), close)
+    ann3 = g.announce(sit3, now=300.0, scene=close)
+    check("0.9 m DOES alert", ann3 is not None,
+          ann3.text if ann3 else "silent")
+
+    # a direct question is always answered, regardless of mode
+    answer, _earcon = g.safety_answer(FakeSensor(1.5), far)
+    check("direct questions always answered", bool(answer), answer)
+
+
+def test_label_stability() -> None:
+    """A name must be earned before it is spoken.
+
+    On the Pi a seated person was announced as a "microwave". A segmentation
+    model flickers between classes on the same object, and naming the first
+    frame it emits turns noise into confident lies.
+    """
+    print("label stability (anti-hallucination)")
+    from smartcane.vision import TrackedObject, _stable_label
+
+    label, stable = _stable_label({"person": 3, "microwave": 3})
+    check("a 50/50 flicker is not stable", not stable, f"{label}")
+
+    label2, stable2 = _stable_label({"person": 5, "microwave": 1})
+    check("a clear majority is stable", stable2 and label2 == "person", label2)
+
+    _l3, stable3 = _stable_label({"person": 1})
+    check("one vote is not enough", not stable3, str(stable3))
+
+    def obj_for(name):
+        return TrackedObject(
+            tid=1, label=name, x=320, y=240, box_h=100, box_w=60,
+            zone="center", hits=5, last_seen=0.0, dist_m=1.0,
+            label_stable=True, label_votes={name: 5})
+
+    check("chair is named", obj_for("chair").spoken_label == "chair",
+          obj_for("chair").spoken_label)
+    check("escalator is off-profile indoors -> obstacle",
+          obj_for("escalator").spoken_label == "obstacle",
+          obj_for("escalator").spoken_label)
+    check("boat is off-profile indoors -> obstacle",
+          obj_for("boat").spoken_label == "obstacle",
+          obj_for("boat").spoken_label)
+
+    unstable = obj_for("chair")
+    unstable.label_stable = False
+    check("an unstable label becomes obstacle",
+          unstable.spoken_label == "obstacle", unstable.spoken_label)
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
     print("=" * 60)
+    import smartcane.config as cfg
+
+    # The chatty behaviours are opt-in now, so those tests ask for them.
+    cfg.UNSOLICITED_ALERTS = "all"
     test_intent()
     test_no_false_triggers()
     test_steps()
@@ -547,6 +643,9 @@ def main() -> int:
     test_cooldown_isolation()
     test_persistent_hazard_repeats()
     test_phrasing()
+    cfg.UNSOLICITED_ALERTS = "critical"
+    test_quiet_by_default()
+    test_label_stability()
     test_query_responses()
     test_safety_answer()
     test_multi_object_and_turns()

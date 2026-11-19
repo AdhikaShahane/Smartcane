@@ -1,4 +1,4 @@
-﻿"""Central configuration for Sahayak Drishti.
+"""Central configuration for Sahayak Drishti.
 
 Every hardware pin, port, threshold and tunable lives here. Nothing else in the
 package hard-codes a magic number, so the whole system can be retuned from one
@@ -117,8 +117,79 @@ HAZARD_IDS = BARRIER_IDS | MOVER_IDS | CLUTTER_IDS | STAIR_IDS
 # Classes that count as background and must never be treated as obstacles.
 IGNORE_IDS = {2, 3, 5, 6}          # building, sky, tree, ceiling
 
-# Human-readable names for the classes we act on. Anything not listed still
-# forms part of the obstacle mask, it just is not spoken by name.
+# ---------------------------------------------------------------------------
+# ENVIRONMENT PROFILE
+# ---------------------------------------------------------------------------
+# A classroom does not contain a jet ski. Naming every class the model can
+# possibly emit is how you get "microwave" shouted at a seated person.
+#
+# The profile only controls what gets NAMED. Anything not on the list is still
+# treated as an obstacle - it is physically there - it simply is not named,
+# and is spoken as "an obstacle".
+#
+#   indoor  : classroom, lab, corridor, home
+#   outdoor : street, pavement, campus
+#   all     : no filtering
+ENVIRONMENT = os.getenv("SMARTCANE_ENV", "indoor").strip().lower()
+
+INDOOR_NAMES = {
+    "person", "chair", "armchair", "table", "desk", "counter", "countertop",
+    "door", "wall", "window", "floor", "rug", "stairs", "stairway", "step",
+    "cabinet", "shelf", "bookcase", "box", "bag", "basket", "bin",
+    "plant", "bench", "railing", "pillar", "display case", "refrigerator",
+    "sidewalk", "path", "bag", "sign",
+}
+
+OUTDOOR_NAMES = {
+    "person", "car", "bus", "truck", "van", "bicycle", "animal",
+    "door", "wall", "fence", "railing", "pillar", "stairs", "stairway",
+    "step", "road", "sidewalk", "path", "grass", "ground",
+    "traffic light", "street light", "sign", "bench", "bin",
+}
+
+# Things worth naming regardless of where you are.
+ALWAYS_NAMES = {"person", "car", "bus", "truck", "van", "bicycle", "animal"}
+
+# Height estimation still needs the raw label, so this map stays complete;
+# the profile only decides whether the name is *spoken*.
+
+
+def allowed_names() -> set[str]:
+    """Classes this deployment is willing to name out loud."""
+    if ENVIRONMENT == "all":
+        return set(ADE20K_NAMES.values()) | set(ADE20K_HEIGHTS)
+    if ENVIRONMENT == "outdoor":
+        return OUTDOOR_NAMES | ALWAYS_NAMES
+    return INDOOR_NAMES | ALWAYS_NAMES
+
+
+# NAMED_NAMES is computed further down, once ADE20K_NAMES exists.
+
+# ---------------------------------------------------------------------------
+# HOW MUCH IT TALKS
+# ---------------------------------------------------------------------------
+#   critical : speak only when it is a stop-level hazard. Everything else is
+#              answered on request. This is the default because continuous
+#              chatter is how an assistive device gets switched off.
+#   medium   : also warn about things blocking the path
+#   all      : full chatty behaviour (proactive guidance for everything)
+UNSOLICITED_ALERTS = os.getenv("SMARTCANE_ALERTS", "critical").strip().lower()
+
+# In "critical" mode the cane stays silent unless something is this close.
+# Speech costs about a second; at 1.4 m/s that is the distance you cover while
+# it is still talking, so this is the outer edge of useful.
+ALERT_DISTANCE_M = float(os.getenv("SMARTCANE_ALERT_DISTANCE", "1.0"))
+
+# ---------------------------------------------------------------------------
+# LABEL STABILITY  (anti-hallucination)
+# ---------------------------------------------------------------------------
+# A segmentation model flickers between classes on the same object. Naming the
+# first frame it sees produces nonsense, so a label must earn the right to be
+# spoken: enough votes, and a clear majority.
+LABEL_MIN_VOTES = 3
+LABEL_MIN_SHARE = 0.60
+# A component smaller than this fraction of the frame is noise, not an object.
+SEG_MIN_AREA_FRAC = 0.012
 ADE20K_NAMES = {
     1: "wall", 4: "floor", 7: "road", 9: "window", 10: "grass",
     12: "sidewalk", 13: "person", 14: "ground", 15: "door",
@@ -149,6 +220,9 @@ ADE20K_HEIGHTS = {
     "plant": 0.60, "display case": 1.20,
     "stairs": 1.00, "stairway": 2.00, "step": 0.18, "escalator": 1.00,
 }
+
+# Computed here because allowed_names() needs ADE20K_NAMES, which is above.
+NAMED_NAMES = allowed_names()
 
 # ---------------------------------------------------------------------------
 # SEGMENTATION MODEL
