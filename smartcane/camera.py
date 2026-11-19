@@ -1,4 +1,4 @@
-"""Camera abstraction.
+﻿"""Camera abstraction.
 
 On Raspberry Pi OS Bookworm the CSI camera is NOT exposed as /dev/video0 by
 default, so `cv2.VideoCapture(0)` silently fails on a Pi Camera Module. This
@@ -298,6 +298,29 @@ class Camera:
                     self._grab_failures)
         self._reconnect()
 
+    @property
+    def needs_open(self) -> bool:
+        """True when no capture handle exists yet - the camera never opened."""
+        return (self._cap is None and self._picam is None
+                and self.backend not in ("mock",))
+
+    def retry_open(self) -> None:
+        """Keep trying to acquire a camera that was never found.
+
+        At boot the WiFi usually comes up after the program does. Without this
+        the camera is looked for once, not found, and never looked for again -
+        so an unattended boot with a slow hotspot runs blind forever.
+        """
+        now = time.monotonic()
+        if now - self._last_reconnect < config.CAM_RECONNECT_INTERVAL_SEC:
+            return
+        self._last_reconnect = now
+        log.info("looking for a camera again ...")
+        if self._open_real():
+            log.info("camera acquired: %s", self.backend)
+        else:
+            log.info("still no camera - will keep trying")
+
     def _reconnect(self) -> None:
         try:
             if self._cap is not None:
@@ -332,6 +355,10 @@ class _CaptureLoop(StoppableThread):
             image = None
             if self.cam.backend != "mock":
                 image = self.cam._grab()
+            if image is None and self.cam.needs_open:
+                # Never opened at all - typical when the Pi boots faster than
+                # the hotspot. Keep trying instead of giving up for good.
+                self.cam.retry_open()
             if image is None:
                 if self.cam.lost and not config.CAM_SYNTHETIC_ON_LOSS:
                     # A real camera dropped mid-run. Publishing a synthetic
