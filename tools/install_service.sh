@@ -39,7 +39,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --camera) CAMERA="${2:-}"; shift 2 ;;
         --mic)    MIC="${2:-}";    shift 2 ;;
+        --demo)   DEMO="1"; shift ;;
         --no-demo) DEMO="0"; shift ;;
+        --groups) EXTRA_GROUPS="${2:-}"; shift 2 ;;
         --extra)  EXTRA="${2:-}";  shift 2 ;;
         -h|--help) usage ;;
         *) echo "unknown option: $1"; usage ;;
@@ -102,26 +104,19 @@ if [ -n "$EXTRA" ]; then
     EXEC_ARGS="${EXEC_ARGS} ${EXTRA}"
 fi
 
-# Only request groups that exist. systemd refuses to start a unit whose
-# Group= or SupplementaryGroups= names a group the system does not have, and
-# reports it as the cryptic "status=216/GROUP", which looks like a code fault.
+# Group configuration is deliberately minimal.
 #
-# Group= is left OUT entirely: systemd then uses the user's primary group,
-# which is always correct. Naming a group explicitly only adds a way to break.
-GROUPS_LIST=""
-for g in audio video gpio dialout plugdev; do
-    if getent group "$g" > /dev/null 2>&1; then
-        if [ -z "$GROUPS_LIST" ]; then
-            GROUPS_LIST="$g"
-        else
-            GROUPS_LIST="${GROUPS_LIST},$g"
-        fi
-    fi
-done
-if [ -n "$GROUPS_LIST" ]; then
-    GROUPS_LINE="SupplementaryGroups=${GROUPS_LIST}"
-else
-    GROUPS_LINE=""
+# systemd fails the whole unit with "status=216/GROUP" when Group= or
+# SupplementaryGroups= names a group it cannot resolve, and the message says
+# nothing about groups - it reads like a Python crash. Chasing that across two
+# attempts was a waste of the user's time, so the unit now names NO groups at
+# all: systemd uses the user's primary group, and on Raspberry Pi OS the login
+# user is already in audio/video/dialout.
+#
+# If a machine really needs extra groups, pass them explicitly with --groups.
+GROUPS_LINE=""
+if [ -n "${EXTRA_GROUPS:-}" ]; then
+    GROUPS_LINE="SupplementaryGroups=${EXTRA_GROUPS}"
 fi
 
 # -- write the unit ----------------------------------------------------------
