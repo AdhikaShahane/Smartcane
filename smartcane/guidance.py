@@ -210,9 +210,39 @@ class Guidance:
         else:
             sit.state = State.CLEAR
 
+        sit.state = self._damped(sit.state, sit.dist_m)
+
         sit.blocked = sit.state in (State.URGENT, State.STOP)
         sit.steps = steps_available(sit.dist_m, self.step_len)
         return sit
+
+    _SEVERITY = {State.CLEAR: 0, State.WATCH: 1, State.ADVISORY: 2,
+                 State.URGENT: 3, State.STOP: 4}
+
+    def _damped(self, new_state: str, dist_m: float | None) -> str:
+        """Stop the state flapping across a threshold.
+
+        Escalation is applied immediately: if something suddenly becomes
+        dangerous the user must hear about it now. Relaxation waits until the
+        reading has clearly improved, because a sensor hovering at a boundary
+        otherwise announces the same thing over and over.
+        """
+        previous = self._state
+        new_rank = self._SEVERITY.get(new_state)
+        old_rank = self._SEVERITY.get(previous)
+        if new_rank is None or old_rank is None or new_rank >= old_rank:
+            return new_state                      # escalating or unchanged
+        if dist_m is None:
+            return new_state                      # no distance: nothing to damp
+
+        band = {State.STOP: config.STOP_METERS,
+                State.URGENT: config.URGENT_METERS,
+                State.ADVISORY: config.ADVISORY_METERS}.get(previous)
+        if band is None:
+            return new_state
+        if dist_m < band + config.STATE_HYSTERESIS_M:
+            return previous                       # not clear enough yet
+        return new_state
 
     # -- announcement ------------------------------------------------------
     def _may_speak(self, sit: Situation) -> bool:

@@ -335,6 +335,15 @@ STRIDE_FILE = Path.home() / ".smartcane_stride"
 STOP_METERS = 0.40        # < this  -> STOP state, earcon + "Stop"
 URGENT_METERS = 0.80      # < this  -> URGENT, announce immediately
 ADVISORY_METERS = 1.60    # < this  -> ADVISORY, announce once
+# Deadband on the state thresholds. Escalation is immediate - going from
+# clear to stop must never wait. Relaxing a state requires the reading to
+# improve by this much first.
+#
+# Without it, a sensor resting near 0.40 m jitters either side of the
+# threshold and the state flips STOP/CLEAR/STOP several times a second.
+# Every flip counts as a change worth announcing, so the cane talks
+# continuously at a stationary obstacle - which is what it did on a desk.
+STATE_HYSTERESIS_M = float(os.getenv("SMARTCANE_HYSTERESIS", "0.15"))
 WATCH_METERS = 2.40       # < this  -> WATCH, silent tracking
 SENSOR_HORIZON = 2.00     # what we actually trust for step guidance
 STOP_MARGIN = 0.50        # body clearance subtracted before counting steps

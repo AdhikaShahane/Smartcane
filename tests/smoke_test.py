@@ -961,6 +961,40 @@ def test_sos_preempts_speech() -> None:
           hasattr(audio2, "prewarm"), "no prewarm")
 
 
+def test_state_hysteresis() -> None:
+    """A sensor resting near a threshold must not make the cane babble.
+
+    Reported from the bench: after starting as a service the cane "spoke
+    continuously". The ultrasonic was pointing at something about 40 cm away,
+    and its reading jittered either side of STOP_METERS. Every crossing was a
+    state change, every state change was an announcement, so it talked without
+    pause. Escalation must stay instant; relaxation has to wait.
+    """
+    print("state hysteresis")
+    g = Guidance(step_len=0.65)
+    # realistic jitter around the 0.40 m STOP threshold, as when left on a desk
+    sequence = [0.38, 0.42, 0.39, 0.41, 0.43, 0.37, 0.44, 0.40]
+    states = []
+    spoken = 0
+    now = 5000.0
+    for dist in sequence:
+        now += 0.2
+        sit = g.assess(FakeSensor(dist), None)
+        states.append(sit.state)
+        if g.announce(sit, now=now):
+            spoken += 1
+    check("jitter does not produce a different state each time",
+          len(set(states)) <= 2, str(states))
+    check("and it barely speaks", spoken <= 2, f"{spoken} announcements")
+
+    # Escalation must NOT be damped: something appearing close is announced
+    # at once, whatever the previous state was.
+    fresh = Guidance(step_len=0.65)
+    check("clearing to a close obstacle escalates immediately",
+          fresh.assess(FakeSensor(0.3), None).state == "stop",
+          fresh.assess(FakeSensor(0.3), None).state)
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -993,6 +1027,7 @@ def main() -> int:
     test_sos()
     test_demo_mode()
     test_sos_preempts_speech()
+    test_state_hysteresis()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")
