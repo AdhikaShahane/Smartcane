@@ -198,18 +198,85 @@ def mask_to_objects(mask: np.ndarray, min_area_frac: float = 0.004
 
 
 # ---------------------------------------------------------------------------
+# SegFormer / ONNX plumbing
+# ---------------------------------------------------------------------------
+_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+def _resize_nearest(arr: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Nearest-neighbour resize. No dependency on cv2 or scipy."""
+    src_h, src_w = arr.shape[:2]
+    if src_h == height and src_w == width:
+        return arr
+    rows = (np.arange(height) * (src_h / float(height))).astype(np.int64)
+    cols = (np.arange(width) * (src_w / float(width))).astype(np.int64)
+    rows = np.clip(rows, 0, src_h - 1)
+    cols = np.clip(cols, 0, src_w - 1)
+    return arr[rows][:, cols]
+
+
+def _preprocess(image: np.ndarray, size: int) -> np.ndarray:
+    """BGR uint8 HxWx3 -> normalised float32 NCHW, as SegFormer expects."""
+    try:
+        import cv2
+        resized = cv2.resize(image, (size, size),
+                             interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32)
+    except Exception:                                   # noqa: BLE001
+        resized = _resize_nearest(image, size, size).astype(np.float32)
+        rgb = resized[:, :, ::-1]                       # BGR -> RGB
+    rgb /= 255.0
+    rgb = (rgb - _IMAGENET_MEAN) / _IMAGENET_STD
+    return np.ascontiguousarray(rgb.transpose(2, 0, 1)[None, ...],
+                                dtype=np.float32)
+
+
+def _logits_to_mask(logits: np.ndarray, frame_hw: tuple[int, int]
+                    ) -> np.ndarray:
+    """(1, C, h, w) logits -> int32 class map at the original frame size."""
+    arr = np.squeeze(logits)
+    if arr.ndim == 3:
+        # Channel axis is whichever one matches the ADE20K class count.
+        if arr.shape[0] == len(config.ADE20K_NAMES) or arr.shape[0] == 150:
+            mask = arr.argmax(axis=0)
+        elif arr.shape[-1] in (150, len(config.ADE20K_NAMES)):
+            mask = arr.argmax(axis=-1)
+        else:
+            # Assume channels-first, which is what SegFormer exports.
+            mask = arr.argmax(axis=0)
+    elif arr.ndim == 2:
+        mask = arr.astype(np.int32)
+    else:
+        raise ValueError(f"unexpected segmentation output shape {logits.shape}")
+    mask = mask.astype(np.int32)
+    height, width = frame_hw[0], frame_hw[1]
+    return _resize_nearest(mask, height, width)
+
+
+# ---------------------------------------------------------------------------
 # The model
 # ---------------------------------------------------------------------------
 class SegDetector:
     """Wraps whichever ADE20K semantic model is available.
 
-    The Ultralytics semantic-segmentation output attribute has changed between
-    releases, so several are tried. If none work, `load()` returns False and
-    the vision layer falls back to the legacy detector rather than dying.
+    Two backends because there is no single answer:
+
+    * **onnx (SegFormer)** - the only ADE20K semantic model that is actually
+      published. Ultralytics does NOT ship one; its `*-seg.pt` weights are
+      COCO *instance* segmentation and cannot label floor, wall or path.
+      HuggingFace publishes SegFormer fine-tuned on ADE20K with ONNX weights,
+      which is what tools/fetch_model.py downloads.
+    * **yolo-sem** - kept for a custom-trained checkpoint.
+
+    If neither loads, `load()` returns False and the vision layer falls back to
+    the legacy COCO detector rather than dying.
     """
 
     def __init__(self) -> None:
         self.model = None
+        self.session = None
+        self.input_name = ""
         self.backend = "none"
         self.path = None
 
@@ -223,6 +290,35 @@ class SegDetector:
             log.warning("no ADE20K segmentation model in %s "
                         "(run tools/fetch_model.py)", config.MODEL_DIR)
             return False
+        self.path = path
+        if path.suffix.lower() == ".onnx":
+            return self._load_onnx(path)
+        return self._load_yolo(path)
+
+    def _load_onnx(self, path) -> bool:
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            log.error("onnxruntime not installed: pip install onnxruntime")
+            return False
+        try:
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = 2      # leave cores for audio
+            opts.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
+            self.session = ort.InferenceSession(
+                str(path), sess_options=opts,
+                providers=["CPUExecutionProvider"])
+            self.input_name = self.session.get_inputs()[0].name
+            self.backend = "onnx-segformer"
+            log.info("segmentation model: %s (onnx)", path.name)
+            return True
+        except Exception as exc:                        # noqa: BLE001
+            log.error("could not load %s: %s", path.name, exc)
+            self.session = None
+            return False
+
+    def _load_yolo(self, path) -> bool:
         try:
             from ultralytics import YOLO
         except ImportError:
@@ -231,8 +327,7 @@ class SegDetector:
         try:
             self.model = YOLO(str(path), task="segment")
             self.backend = "yolo-sem"
-            self.path = path
-            log.info("segmentation model: %s", path.name)
+            log.info("segmentation model: %s (yolo)", path.name)
             return True
         except Exception as exc:                        # noqa: BLE001
             log.error("could not load %s: %s", path.name, exc)
@@ -241,6 +336,8 @@ class SegDetector:
 
     def infer(self, image) -> np.ndarray | None:
         """Return an HxW array of ADE20K class ids, or None."""
+        if self.backend == "onnx-segformer":
+            return self._infer_onnx(image)
         if self.model is None:
             return None
         try:
@@ -251,12 +348,21 @@ class SegDetector:
             return None
         if not results:
             return None
-        result = results[0]
+        return self._extract_mask(results[0])
 
-        mask = self._extract_mask(result)
-        if mask is None:
+    # -- ONNX path ---------------------------------------------------------
+    def _infer_onnx(self, image) -> np.ndarray | None:
+        if self.session is None:
             return None
-        return mask
+        try:
+            size = config.SEG_INPUT_SIZE
+            inp = _preprocess(image, size)
+            outputs = self.session.run(None, {self.input_name: inp})
+            logits = np.asarray(outputs[0])
+            return _logits_to_mask(logits, image.shape[:2])
+        except Exception as exc:                        # noqa: BLE001
+            log.warning("onnx segmentation failed: %s", exc)
+            return None
 
     @staticmethod
     def _extract_mask(result) -> np.ndarray | None:

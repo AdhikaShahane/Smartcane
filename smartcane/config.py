@@ -231,13 +231,15 @@ NAMED_NAMES = allowed_names()
 # the pretrained ADE20K semantic model, or you train your own with
 # tools/train_segmentation.py.
 SEG_MODEL_CANDIDATES = [
-    MODEL_DIR / "yolo11n-sem-ade20k.pt",
-    MODEL_DIR / "yolo26n-sem-ade20k.pt",
-    MODEL_DIR / "smartcane-seg.pt",
+    MODEL_DIR / "segformer-ade20k.onnx",      # what fetch_model.py downloads
     MODEL_DIR / "ade20k-seg.onnx",
+    MODEL_DIR / "yolo11n-sem-ade20k.pt",
+    MODEL_DIR / "smartcane-seg.pt",
 ]
 SEG_IMGSZ = 256           # segmentation is heavier than detection; 256 is the
                           # sweet spot on a Pi 4
+# SegFormer is fixed at the resolution it was fine-tuned on.
+SEG_INPUT_SIZE = int(os.getenv("SMARTCANE_SEG_SIZE", "512"))
 SEG_CONF = 0.30
 # A coarse occupancy grid turns the mask into "can I walk here" cheaply.
 GRID_W, GRID_H = 15, 12   # 15 divides into three equal 5-column zones
