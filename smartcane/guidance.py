@@ -1,4 +1,4 @@
-"""Decision layer: turns sensors + scene into a state and, only when it matters,
+﻿"""Decision layer: turns sensors + scene into a state and, only when it matters,
 into words.
 
 Two rules drive everything here:
@@ -250,7 +250,11 @@ class Guidance:
         # Announcements fire on transitions, so without this a person standing
         # in the path was announced once and then never mentioned again --
         # the user was told once and left to walk into them in silence.
-        if not changed and (now - self._last_hazard_at) >= config.REPEAT_AFTER_SEC:
+        # Only genuine hazards get restated. Repeating an advisory every 8 s is
+        # what made the cane feel like it would not shut up.
+        if (not changed
+                and sit.state in (State.URGENT, State.STOP)
+                and (now - self._last_hazard_at) >= config.REPEAT_AFTER_SEC):
             changed = True
 
         # SAFETY: a cooldown must never silence an urgent warning. Only
@@ -425,7 +429,7 @@ class Guidance:
                 f"{direction} and walk {_num(steps)} steps to go around it.")
 
     def describe_all(self, sensor, scene) -> str:
-        """'What objects are around me?' — all three zones, not just ahead."""
+        """'What objects are around me?' â€” all three zones, not just ahead."""
         if scene is None or not scene.objects:
             sit = self.assess(sensor, scene)
             if sit.dist_m is None:
@@ -464,7 +468,7 @@ class Guidance:
         return "The path is clear ahead. You can walk.", "ok"
 
     def steps_to_walk(self, sensor, scene) -> str:
-        """Answer 'how many steps?' — with a turn when the way is blocked.
+        """Answer 'how many steps?' â€” with a turn when the way is blocked.
 
         The old version only ever said "walk N steps" and never suggested a
         direction, so a blocked corridor produced no usable guidance.

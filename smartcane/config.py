@@ -173,7 +173,7 @@ def allowed_names() -> set[str]:
 #              chatter is how an assistive device gets switched off.
 #   medium   : also warn about things blocking the path
 #   all      : full chatty behaviour (proactive guidance for everything)
-UNSOLICITED_ALERTS = os.getenv("SMARTCANE_ALERTS", "critical").strip().lower()
+UNSOLICITED_ALERTS = os.getenv("SMARTCANE_ALERTS", "medium").strip().lower()
 
 # In "critical" mode the cane stays silent unless something is this close.
 # Speech costs about a second; at 1.4 m/s that is the distance you cover while
@@ -307,7 +307,7 @@ TTC_MEDIUM_SEC = 4.0
 OUTLIER_JUMP_M = 1.00
 # 2. if fewer than this fraction of frames are readable, the link is not usable
 #    and the ultrasonic is ignored entirely rather than occasionally believed
-MIN_LINK_RELIABILITY = 0.35
+MIN_LINK_RELIABILITY = 0.05
 LINK_RELIABILITY_WINDOW = 40
 
 # ---------------------------------------------------------------------------

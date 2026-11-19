@@ -350,27 +350,37 @@ def test_resample() -> None:
 
 
 def test_persistent_hazard_repeats() -> None:
-    """A hazard that does not change must be restated.
+    """A genuine hazard is restated; a mere advisory is not.
 
-    Regression: announcements fire on transitions, so a person standing in
-    the path was announced once at the start and then never mentioned again.
-    The user was warned once and then left to walk into them in silence.
+    Repeating an advisory every few seconds is what made the cane feel like it
+    would not shut up, so only URGENT and STOP are restated now.
     """
     print("persistent hazard reminder")
     import smartcane.config as cfg
-    g = Guidance(step_len=0.65)
+
+    hazard = Guidance(step_len=0.65)
     t = 7000.0
     count = 0
-    for _ in range(25):                      # 25 s of an unchanged obstacle
+    for _ in range(25):                      # 25 s of an unchanged URGENT hazard
         t += 1.0
-        ann = g.announce(g.assess(FakeSensor(1.2), None), now=t)
-        if ann:
+        if hazard.announce(hazard.assess(FakeSensor(0.5), None), now=t):
             count += 1
-    check("obstacle restated over 25 s", count >= 2, f"{count} announcements")
+    check("urgent hazard restated over 25 s", count >= 2,
+          f"{count} announcements")
     check("not chattering every second", count <= 8, f"{count} announcements")
     expected = int(25 / cfg.REPEAT_AFTER_SEC) + 1
     check("roughly one per REPEAT_AFTER_SEC", abs(count - expected) <= 1,
           f"{count} vs ~{expected}")
+
+    advisory = Guidance(step_len=0.65)
+    t = 9000.0
+    repeated = 0
+    for _ in range(25):                      # 25 s of an unchanged ADVISORY
+        t += 1.0
+        if advisory.announce(advisory.assess(FakeSensor(1.2), None), now=t):
+            repeated += 1
+    check("an advisory is said once, not repeated", repeated == 1,
+          f"{repeated} announcements")
 
 
 def test_query_responses() -> None:
@@ -561,9 +571,15 @@ def test_quiet_by_default() -> None:
     print("quiet by default")
     import smartcane.config as cfg
 
-    check("default mode is critical", cfg.UNSOLICITED_ALERTS == "critical",
-          cfg.UNSOLICITED_ALERTS)
+    old_mode = cfg.UNSOLICITED_ALERTS
+    cfg.UNSOLICITED_ALERTS = "critical"
+    try:
+        _run_quiet_checks(cfg)
+    finally:
+        cfg.UNSOLICITED_ALERTS = old_mode
 
+
+def _run_quiet_checks(cfg) -> None:
     g = Guidance(step_len=0.65)
     far = _scene_with(("chair", "center", 1.5, 0.9))
     sit = g.assess(FakeSensor(1.5), far)
@@ -732,6 +748,7 @@ def main() -> int:
     import smartcane.config as cfg
 
     # The chatty behaviours are opt-in now, so those tests ask for them.
+    original_mode = cfg.UNSOLICITED_ALERTS
     cfg.UNSOLICITED_ALERTS = "all"
     test_intent()
     test_no_false_triggers()
@@ -740,7 +757,6 @@ def main() -> int:
     test_cooldown_isolation()
     test_persistent_hazard_repeats()
     test_phrasing()
-    cfg.UNSOLICITED_ALERTS = "critical"
     test_quiet_by_default()
     test_label_stability()
     test_query_responses()
