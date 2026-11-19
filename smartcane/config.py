@@ -272,10 +272,28 @@ FAST_CONFIRM_CONF = 0.65
 MOTION_MIN_SPAN = 0.30    # s of history required before trusting a speed
 MOTION_MIN_CHANGE_M = 0.25  # distance change that counts as approaching/leaving
 CLOSING_MIN_SPEED = 0.25  # m/s below which "closing" is just noise
+# Nothing in a corridor closes faster than this. Anything above it is a
+# monocular-estimation artefact, not real motion, and must not trigger a stop.
+MAX_PLAUSIBLE_CLOSING = 6.0
 # Time to collision thresholds. These are what turn a stationary classification
 # into a real risk: a car 6 m away doing 2 m/s is 3 s from you.
 TTC_CRITICAL_SEC = 1.5
 TTC_MEDIUM_SEC = 4.0
+
+# ---------------------------------------------------------------------------
+# SERIAL TRUST  (fighting corruption on a noisy link)
+# ---------------------------------------------------------------------------
+# A corrupt byte inside the number field turns "150.4 cm" into "19.4 cm". That
+# is still a plausible distance, so it sails past the range check and becomes a
+# false STOP. Two defences:
+#
+# 1. a reading that jumps further than this from the recent median is held back
+#    until a second reading agrees with it, so genuine changes still land
+OUTLIER_JUMP_M = 1.00
+# 2. if fewer than this fraction of frames are readable, the link is not usable
+#    and the ultrasonic is ignored entirely rather than occasionally believed
+MIN_LINK_RELIABILITY = 0.35
+LINK_RELIABILITY_WINDOW = 40
 
 # ---------------------------------------------------------------------------
 # RISK ESCALATION

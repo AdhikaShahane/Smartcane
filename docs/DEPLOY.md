@@ -1,4 +1,4 @@
-# Deploying Sahayak Drishti on the Raspberry Pi 4
+﻿# Deploying Sahayak Drishti on the Raspberry Pi 4
 
 ## Start here: one command that checks everything
 
@@ -8,8 +8,8 @@ source ~/cane/bin/activate
 bash tools/healthcheck.sh
 ```
 
-It tests all eight layers — code version, unit tests, audio devices, mic
-signal, Arduino link, camera, speech engine, detector — and prints `PASS` or
+It tests all eight layers â€” code version, unit tests, audio devices, mic
+signal, Arduino link, camera, speech engine, detector â€” and prints `PASS` or
 `FAIL` for each with the fix for anything that failed. **Send the output of
 this one command** and the whole state of the system is known.
 
@@ -18,10 +18,10 @@ Skip the 4-second recording with `bash tools/healthcheck.sh --no-mic-test`.
 ---
 
 Everything below is ordered so that **each step can fail on its own and you know
-immediately which part is broken.** Do not skip to the end — steps 6 and 7 exist
+immediately which part is broken.** Do not skip to the end â€” steps 6 and 7 exist
 to prove the sensors and the audio work before you try the full system.
 
-Estimated time: 60–90 minutes on a fresh Pi, mostly downloading.
+Estimated time: 60â€“90 minutes on a fresh Pi, mostly downloading.
 
 ---
 
@@ -38,9 +38,9 @@ Estimated time: 60–90 minutes on a fresh Pi, mostly downloading.
 
 That is the whole build. No GPS, no accelerometer, no motor.
 
-> ⚠️ **The sensor is a Grove Ultrasonic Ranger V2.0, not an HC-SR04.** They are
+> âš ï¸ **The sensor is a Grove Ultrasonic Ranger V2.0, not an HC-SR04.** They are
 > wired differently and the code is different. The Ranger has pins labelled
-> `GND VCC NC SIG` — trigger and echo share the single SIG wire. An HC-SR04
+> `GND VCC NC SIG` â€” trigger and echo share the single SIG wire. An HC-SR04
 > has separate TRIG and ECHO pins and will not work with this sketch.
 
 ---
@@ -48,20 +48,20 @@ That is the whole build. No GPS, no accelerometer, no motor.
 ## 2. Flash the Arduino
 
 1. Open `arduino/smartcane_sensor_hub/smartcane_sensor_hub.ino` in the Arduino IDE.
-2. **No libraries to install** — it uses only what ships with the IDE.
+2. **No libraries to install** â€” it uses only what ships with the IDE.
 3. Upload to the Uno.
 
-**Wiring — the Grove Ranger needs 3 wires, not 4:**
+**Wiring â€” the Grove Ranger needs 3 wires, not 4:**
 
 | Grove wire | Board label | Arduino pin |
 |---|---|---|
 | **Black** | GND | GND (POWER header) |
-| **Red** | VCC | **5V** (POWER header — not RESET, not 3V3) |
+| **Red** | VCC | **5V** (POWER header â€” not RESET, not 3V3) |
 | **White** | NC | *leave unconnected* |
 | **Yellow** | SIG | **D7** (DIGITAL header) |
 
 D13 is the Uno's own onboard LED. It lights whenever something is closer than
-60 cm — no wiring needed, and it is the quickest way to see the sensor working.
+60 cm â€” no wiring needed, and it is the quickest way to see the sensor working.
 
 The module needs **at least 60 ms between pings**; the sketch measures every
 80 ms and streams to the Pi at 20 Hz.
@@ -78,7 +78,7 @@ sudo apt update && sudo apt full-upgrade -y
 sudo reboot
 ```
 
-**Camera — the most common failure point.** Bookworm uses libcamera, and the
+**Camera â€” the most common failure point.** Bookworm uses libcamera, and the
 CSI camera is *not* exposed as `/dev/video0` by default. Our `camera.py` handles
 this by using `picamera2` first, so install it:
 
@@ -92,7 +92,7 @@ Check it:
 libcamera-hello -t 3000        # should show a preview for 3 seconds
 ```
 
-If `libcamera-hello` works but our code says "camera backend: mock", tell us —
+If `libcamera-hello` works but our code says "camera backend: mock", tell us â€”
 that is a picamera2/venv issue, not a hardware one.
 
 **Audio:**
@@ -148,7 +148,7 @@ pip install -r requirements-pi.txt
 ```
 
 `ultralytics` pulls in PyTorch, which is large (~800 MB). On a 4 GB Pi this
-works but is slow to install — let it run.
+works but is slow to install â€” let it run.
 
 Add the system packages to the venv so `picamera2` is visible:
 
@@ -187,10 +187,10 @@ You should see lines like:
 RAW[9] b'\xaa\x55\x01\x04\x12\xa4\x00\x00\x6d'
 ```
 
-- **Nothing at all** → wrong port or bad cable. Check `ls /dev/ttyACM*` and
+- **Nothing at all** â†’ wrong port or bad cable. Check `ls /dev/ttyACM*` and
   `ls /dev/ttyUSB*`, then set `SMARTCANE_SERIAL=/dev/ttyACM0`.
-- **Garbage that never stops** → baud mismatch. Confirm the sketch uses 115200.
-- **`b'123\r\n'` style text** → your Arduino is running different firmware. That
+- **Garbage that never stops** â†’ baud mismatch. Confirm the sketch uses 115200.
+- **`b'123\r\n'` style text** â†’ your Arduino is running different firmware. That
   is fine: `link.py` auto-detects CSV, `dist:123`, and JSON formats too.
 
 Wave your hand in front of the sensor and confirm the numbers move.
@@ -199,16 +199,16 @@ Wave your hand in front of the sensor and confirm the numbers move.
 
 ## 7. Run the whole system
 
-**Step A — no hardware at all (proves the software):**
+**Step A â€” no hardware at all (proves the software):**
 
 ```bash
 python -m smartcane --mock --no-mic --mute --duration 15 --verbose
 ```
 
-You should see the state walk `clear → watch → advisory → urgent → stop` and
+You should see the state walk `clear â†’ watch â†’ advisory â†’ urgent â†’ stop` and
 lines like `SPEAK: Obstacle ahead, about 1.5 metres. Walk straight 1 step.`
 
-**Step B — real camera, no speech:**
+**Step B â€” real camera, no speech:**
 
 ```bash
 python -m smartcane --no-mic --verbose
@@ -216,7 +216,7 @@ python -m smartcane --no-mic --verbose
 
 Watch for `camera backend: picamera2` and `detector: yolov8n.pt (pytorch)`.
 
-**Step C — full system:**
+**Step C â€” full system:**
 
 ```bash
 python -m smartcane --verbose
@@ -230,14 +230,15 @@ Then speak: *"what is ahead"*, *"turn left"*, *"stop"*, *"how many steps"*.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `camera backend: mock` | CSI camera not enabled / picamera2 missing | §3; run `libcamera-hello` |
+| `serial line is corrupt (N bad frames)` repeating, but the text around the number is readable | the USB link is mangling the number field - cable or power, **not** the baud rate | try a shorter or better cable, or a powered hub. The cane now rejects those readings and, if most frames are corrupt, **ignores the ultrasonic entirely** rather than raising false STOPs. Flashing `arduino/smartcane_sensor_hub/` gives a CRC that rejects corrupt frames cleanly |
+| `camera backend: mock` | CSI camera not enabled / picamera2 missing | Â§3; run `libcamera-hello` |
 | `no YOLO model found` | `models/` missing | re-clone, or check `ls models/` |
 | `no Arduino serial port found` | cable / permissions | `sudo usermod -aG dialout $USER`, then log out and in |
 | `cannot open microphone` | headset is TRS not TRRS | use a USB sound card |
 | Recognises nothing | Vosk grammar too tight, or mic gain | see below |
-| Speech is chipmunk/slow | sample-rate mismatch | `pip install soxr` — this is the classic 22050→48000 bug |
+| Speech is chipmunk/slow | sample-rate mismatch | `pip install soxr` â€” this is the classic 22050â†’48000 bug |
 | Two sentences overlap | two TTS engines | only one process may own the speaker; check nothing else is running |
-| Very slow (1–2 FPS) | PyTorch at 640 | run `python tools/optimize_model.py` (§9) |
+| Very slow (1â€“2 FPS) | PyTorch at 640 | run `python tools/optimize_model.py` (Â§9) |
 
 **If it recognises nothing**, print what Vosk actually hears:
 
@@ -267,9 +268,9 @@ If that prints nothing either, it is a microphone problem, not our code.
 python tools/optimize_model.py
 ```
 
-This exports `yolov8n.pt` to ncnn/ONNX at 320×320. `vision.py` prefers
+This exports `yolov8n.pt` to ncnn/ONNX at 320Ã—320. `vision.py` prefers
 `models/yolov8n_ncnn_model/` automatically on the next run. Measured on a Pi 4,
-ncnn at 320 is roughly 4× faster than PyTorch at 640.
+ncnn at 320 is roughly 4Ã— faster than PyTorch at 640.
 
 ---
 

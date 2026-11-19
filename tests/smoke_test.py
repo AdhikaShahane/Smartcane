@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Smoke tests that need no hardware.
 
 Run on the Pi or a laptop:
@@ -628,6 +628,59 @@ def test_label_stability() -> None:
           unstable.spoken_label == "obstacle", unstable.spoken_label)
 
 
+def test_serial_trust() -> None:
+    """A noisy link must be ignored, not believed.
+
+    From a real Pi session: the Arduino's text was perfectly readable but the
+    number field was randomly corrupted, so "150.4 cm" arrived as "19.4 cm".
+    That is inside the valid range, so it sailed past the range check and
+    produced "Stop! obstacle at 19 centimetres" as a false alert.
+    """
+    print("serial trust (corrupt link)")
+    from smartcane.link import SerialLink, _looks_like_our_text
+
+    good = b"Distance: 150.4 cm  | PATH CLEAR\r\n"
+    corrupt = [
+        b"Distance: 1S.0 cm  | OBSTACLE NEARBY\r\n",
+        b"Distance: 1T.5 cm  | OBSTACLE NEARBY\r\n",
+        b"Distance: 1U.3 cm  | OBSTACLE NEARBY\r\n",
+        b"Distance: 1M.4 cm  | OBSTACLE NEARBY\r\n",
+    ]
+
+    noisy = SerialLink(mock=False)
+    for i in range(60):
+        noisy.feed(corrupt[i % 4])
+    st = noisy.state()
+    check("unreadable link is not trusted", not st.reliable, str(st.reliable))
+    check("and reports no distance", st.dist_cm is None, str(st.dist_cm))
+    check("so the sensor is treated as invalid", not st.valid, str(st.valid))
+
+    mixed = SerialLink(mock=False)
+    for i in range(40):
+        mixed.feed(good)
+        mixed.feed(corrupt[i % 4])
+    sm = mixed.state()
+    check("a corrupt reading is rejected against the median",
+          sm.dist_cm == 150.4, str(sm.dist_cm))
+    check("a half-clean link is still usable", sm.valid, str(sm.valid))
+
+    change = SerialLink(mock=False)
+    for _ in range(10):
+        change.feed(good)
+    check("clean link is trusted", change.state().valid)
+    change.feed(b"Distance: 20.0 cm  | OBSTACLE NEARBY\r\n")
+    check("a single wild reading is held back",
+          change.state().dist_cm == 150.4, str(change.state().dist_cm))
+    change.feed(b"Distance: 20.0 cm  | OBSTACLE NEARBY\r\n")
+    check("a confirmed change is accepted",
+          abs(change.state().dist_cm - 20.0) < 1.0, str(change.state().dist_cm))
+
+    check("corrupt-but-readable text still proves the baud",
+          _looks_like_our_text(corrupt[0]))
+    check("binary frames are not mistaken for text",
+          not _looks_like_our_text(bytes([0xAA, 0x55, 1, 4, 7, 0x2C, 1, 0])))
+
+
 def main() -> int:
     print("=" * 60)
     print(" Sahayak Drishti - smoke tests (no hardware required)")
@@ -653,6 +706,7 @@ def main() -> int:
     test_resample()
     test_earcons()
     test_serial_parsers()
+    test_serial_trust()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")

@@ -111,6 +111,17 @@ def assess_object(obj: TrackedObject, scene: Scene,
     closing = obj.closing_speed
     ttc = obj.time_to_collision
 
+    # Monocular distance jumps between frames as the box wobbles, which
+    # manufactures enormous closing speeds and absurd time-to-collision. Cap
+    # it at something a person or a vehicle could physically do: beyond that it
+    # is estimator noise, not motion.
+    if closing is not None and abs(closing) > config.MAX_PLAUSIBLE_CLOSING:
+        closing = None
+        ttc = None
+    # A time-to-collision longer than the object is far away is nonsense.
+    if ttc is not None and dist is not None and ttc > max(2.0, dist):
+        ttc = None
+
     # spoken_label collapses an unstable or off-profile label to "obstacle",
     # so a flickering class never gets announced as fact.
     risk = Risk(level=RiskLevel.LOW, label=obj.spoken_label, dist_m=dist,

@@ -21,6 +21,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from . import config
@@ -69,6 +70,8 @@ class SensorState:
     gps_lat: float | None = None
     gps_lon: float | None = None
     sensor_fault: bool = False
+    # False when too many frames on the wire are corrupt to trust any of them.
+    reliable: bool = True
     updated_at: float = 0.0
     frames: int = 0
     source: str = "none"
@@ -83,7 +86,9 @@ class SensorState:
 
     @property
     def valid(self) -> bool:
-        return self.dist_cm is not None and self.age < config.SERIAL_STALE_SEC
+        return (self.dist_cm is not None
+                and self.age < config.SERIAL_STALE_SEC
+                and self.reliable)
 
 
 class SerialLink:
@@ -100,6 +105,13 @@ class SerialLink:
         self._mock_dist = 250.0
         self._discard_count = 0
         self._discard_logged_at = 0.0
+        # Outlier rejection: recent accepted distances, and a candidate change
+        # that must be confirmed by a second agreeing reading.
+        self._accepted: deque = deque(maxlen=5)
+        self._pending_cm: float | None = None
+        # Rolling readability window, for the reliability gate.
+        self._frame_results: deque = deque(
+            maxlen=config.LINK_RELIABILITY_WINDOW)
 
     # -- public ------------------------------------------------------------
     def start(self) -> None:
@@ -133,6 +145,7 @@ class SerialLink:
                 gps_fix=self._state.gps_fix, gps_lat=self._state.gps_lat,
                 gps_lon=self._state.gps_lon,
                 sensor_fault=self._state.sensor_fault,
+                reliable=self._state.reliable,
                 updated_at=self._state.updated_at,
                 frames=self._state.frames, source=self._state.source)
 
@@ -186,13 +199,19 @@ class SerialLink:
                 continue
             try:
                 probe = SerialLink(mock=False)
+                raw = bytearray()
                 deadline = time.monotonic() + 1.2
                 while (time.monotonic() < deadline
                        and probe._state.frames < 3):
                     chunk = ser.read(ser.in_waiting or 1)
                     if chunk:
+                        raw.extend(chunk)
                         probe.feed(chunk)
-                if probe._state.frames >= 3:
+                # Readable text proves the baud is right even when every number
+                # is corrupted. Requiring parsed frames meant a noisy-but-
+                # correctly-configured link was reported as "cannot confirm
+                # the baud rate", which sent the user chasing the wrong fault.
+                if probe._state.frames >= 3 or _looks_like_our_text(raw):
                     if baud != config.SERIAL_BAUD:
                         log.warning("Arduino is talking at %d baud, not %d "
                                     "- using %d", baud, config.SERIAL_BAUD, baud)
@@ -326,6 +345,7 @@ class SerialLink:
                 else:
                     self._apply_csv(text)
             except Exception as exc:                    # noqa: BLE001
+                self._record_frame(False)
                 log.debug("bad frame %r: %s", text, exc)
 
     def _apply_json(self, text: str) -> None:
@@ -336,21 +356,67 @@ class SerialLink:
             gps_fix=int(_num(obj.get("fix")) or 0),
             gps_lat=_num(obj.get("lat")), gps_lon=_num(obj.get("lon")))
 
+    def _accept_distance(self, dist_cm: float) -> bool:
+        """Is this reading consistent with what the sensor has been saying?
+
+        A corrupt byte inside the number field produces a reading that is
+        still inside the valid range - "150.4 cm" becomes "19.4 cm" - so a
+        range check alone cannot catch it. Comparing against the recent median
+        does, and requiring a second agreeing reading means a genuine change
+        (someone stepping closer) is still accepted after one frame.
+        """
+        if len(self._accepted) < 3:
+            self._accepted.append(dist_cm)
+            return True
+
+        recent = sorted(self._accepted)
+        median = recent[len(recent) // 2]
+        jump_cm = config.OUTLIER_JUMP_M * 100.0
+
+        if abs(dist_cm - median) <= jump_cm:
+            self._accepted.append(dist_cm)
+            self._pending_cm = None
+            return True
+
+        # Disagrees with the recent median. Only accept it once a second
+        # reading confirms the new value, so real movement is not blocked.
+        if self._pending_cm is not None and abs(dist_cm - self._pending_cm) <= 30.0:
+            self._accepted.clear()
+            self._accepted.append(dist_cm)
+            self._pending_cm = None
+            return True
+
+        self._pending_cm = dist_cm
+        return False
+
+    def _record_frame(self, ok: bool) -> None:
+        self._frame_results.append(ok)
+        if len(self._frame_results) >= 8:
+            ratio = sum(self._frame_results) / float(len(self._frame_results))
+            self._state.reliable = ratio >= config.MIN_LINK_RELIABILITY
+
     def _apply_kv(self, text: str) -> None:
         vals = {k.lower(): float(v) for k, v in self._KV_RE.findall(text)}
         if not vals:
+            # A line we could not parse at all is still a failed frame. Not
+            # counting it let a stream of unreadable noise look perfectly
+            # reliable, because only parseable-but-out-of-range lines scored.
+            self._record_frame(False)
             return
         dist = vals.get("distance")
         if dist is None:
             dist = vals.get("dist")
         if dist is None:
             dist = vals.get("d")
+        if dist is None:
+            return
         # A sketch that prints "Distance: 150.0 cm" is already in centimetres.
-        if dist is not None and not (DIST_MIN_CM <= dist <= DIST_MAX_CM):
+        if not (DIST_MIN_CM <= dist <= DIST_MAX_CM):
             # Corrupt or out-of-range frame: drop it rather than act on it.
             # Log at most once every two seconds: a bad baud rate produces
             # thousands of these and would bury the rest of the log.
             self._discard_count += 1
+            self._record_frame(False)
             now = time.monotonic()
             if now - self._discard_logged_at >= 2.0:
                 log.warning(
@@ -359,7 +425,17 @@ class SerialLink:
                     "would reject these cleanly.",
                     self._discard_count, text.strip()[:60])
                 self._discard_logged_at = now
+            if not self._state.reliable:
+                log.debug("serial link unreliable - ultrasonic ignored")
             return
+
+        if not self._accept_distance(dist):
+            self._record_frame(False)
+            log.debug("outlier rejected: %.1f cm vs median of %s",
+                      dist, [round(v) for v in self._accepted])
+            return
+
+        self._record_frame(True)
         self._publish(
             dist_cm=dist,
             motion=int(vals.get("mot", vals.get("m", 0))),
@@ -381,6 +457,22 @@ def _is_num(text: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _looks_like_our_text(raw: bytes) -> bool:
+    """True when the stream is mostly printable ASCII with a known marker.
+
+    Used only to confirm a baud rate: corrupt numbers still prove the rate is
+    correct as long as the surrounding text is readable.
+    """
+    if len(raw) < 12:
+        return False
+    printable = sum(1 for b in raw if 32 <= b < 127 or b in (9, 10, 13))
+    if printable / float(len(raw)) < 0.9:
+        return False
+    lowered = raw.lower()
+    return any(marker in lowered for marker in
+               (b"istanc", b" cm", b"path", b"obstacle", b"dist"))
 
 
 def _num(value):
