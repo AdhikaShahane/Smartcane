@@ -1,4 +1,4 @@
-"""Single owner of the speaker.
+﻿"""Single owner of the speaker.
 
 This is the fix for "audio output everything is messed up". The original code
 called pyttsx3 from two threads at once, which is not thread-safe and produces
@@ -278,6 +278,10 @@ class AudioOut:
         self._lock = threading.Lock()
         self._speaking = threading.Event()
         self._interrupt = threading.Event()
+        # Synthesised speech, keyed by text. Spawning espeak-ng costs a few
+        # hundred milliseconds on a Pi 4, which is the difference between an
+        # alarm that feels instant and one that feels broken.
+        self._tts_cache: dict[str, tuple] = {}
         self._thread: StoppableThread | None = None
         self.tts = TtsEngine()
         self.device = resolve_audio_device(
@@ -310,11 +314,39 @@ class AudioOut:
             self._seq += 1
             seq = self._seq
         if priority <= Priority.REFLEX:
+            # Emptying the queue is not enough: the worker is usually sitting
+            # inside a multi-second utterance. Stop it, or the alarm waits for
+            # the current sentence to finish - which is the whole delay the
+            # user sees when they press the button.
+            self._interrupt.set()
+            if _HAVE_SD:
+                try:
+                    sd.stop()
+                except Exception:                       # noqa: BLE001
+                    pass
             self._drain()
         self._q.put((int(priority), seq, _Item(seq, int(priority), text, earcon)))
 
     def say_announcement(self, ann: Announcement) -> None:
         self.say(ann.text, ann.priority, ann.earcon, ann.key)
+
+    def prewarm(self, texts: list[str]) -> None:
+        """Synthesise phrases now so using them later is instant.
+
+        Called at startup for the SOS alarm: the first press must not pay the
+        espeak-ng process-spawn cost.
+        """
+        for text in texts:
+            if not text or text in self._tts_cache:
+                continue
+            try:
+                result = self.tts.synthesize(text)
+            except Exception as exc:                    # noqa: BLE001
+                log.debug("prewarm failed for %r: %s", text, exc)
+                continue
+            if result is not None:
+                self._tts_cache[text] = result
+                log.debug("prewarmed %d chars of speech", len(text))
 
     def repeat_last(self) -> None:
         if self.last_text:
@@ -385,7 +417,11 @@ class AudioOut:
                 return
             log.info("SPEAK: %s", item.text)
             self.last_text = item.text
-            result = self.tts.synthesize(item.text)
+            result = self._tts_cache.get(item.text)
+            if result is None:
+                result = self.tts.synthesize(item.text)
+                if result is not None and len(self._tts_cache) < 32:
+                    self._tts_cache[item.text] = result
             if result is None:
                 # text-only mode: still record it so --verbose runs are useful
                 return

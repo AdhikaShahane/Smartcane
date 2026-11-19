@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Smoke tests that need no hardware.
 
 Run on the Pi or a laptop:
@@ -847,6 +847,20 @@ def test_sos() -> None:
     check("a second press cancels it", alarm.cancel() and not alarm.active)
     check("no repeat once cancelled", not alarm.due(now=300.0))
 
+    # Contact bounce must never toggle the alarm off. A cheap button chatters
+    # for tens of milliseconds, and a second edge CANCELS - the worst possible
+    # failure for a panic button.
+    bounced = SosAlarm()
+    first = bounced.handle_press(now=500.0)
+    check("first press raises the alarm", first == "triggered", str(first))
+    second = bounced.handle_press(now=500.1)
+    check("an immediate re-trigger is ignored as bounce", second is None,
+          str(second))
+    check("the alarm survives the bounce", bounced.active, str(bounced.active))
+    third = bounced.handle_press(now=502.0)
+    check("a genuine later press cancels", third == "cancelled", str(third))
+    check("and it is off afterwards", not bounced.active, str(bounced.active))
+
 
 def test_demo_mode() -> None:
     """Demo mode simulates location sharing, and only demo mode may.
@@ -875,13 +889,54 @@ def test_demo_mode() -> None:
         cfg.DEMO_MODE = True
         demo = build_message(NoGps())
         check("demo simulates sharing", "shared" in demo.lower(), demo)
-        check("demo names who it went to", "contact" in demo.lower(), demo)
+        check("demo says the location is live",
+              "live location" in demo.lower(), demo)
         check("demo is still an emergency line",
               "emergency" in demo.lower(), demo)
     finally:
         cfg.DEMO_MODE = old
 
     check("demo mode is off unless asked", old is False, str(old))
+
+
+def test_sos_preempts_speech() -> None:
+    """The alarm must cut off whatever is being said, instantly.
+
+    Reported from the bench: pressing the button took seconds to answer. The
+    cause was that a REFLEX item only emptied the pending queue - it never
+    stopped the utterance already playing, so the alarm waited for the current
+    sentence to finish.
+    """
+    print("SOS preempts speech")
+    from smartcane.audio_out import AudioOut
+    from smartcane.guidance import Priority
+
+    audio = AudioOut(mute=True)
+    # a queue of ordinary chatter, plus an urgent warning in progress
+    audio._q.put((Priority.INFO, 1, None))
+    audio._q.put((Priority.ADVISORY, 2, None))
+    audio._q.put((Priority.URGENT, 3, None))
+
+    audio.say("Emergency! I need help.", Priority.REFLEX)
+
+    check("reflex stops the utterance in progress",
+          audio._interrupt.is_set(), str(audio._interrupt.is_set()))
+
+    remaining = []
+    while not audio._q.empty():
+        remaining.append(audio._q.get_nowait()[0])
+    check("reflex clears everything queued below it",
+          remaining == [Priority.REFLEX], str(remaining))
+
+    # a normal advisory must not interrupt playback
+    audio2 = AudioOut(mute=True)
+    audio2._interrupt.clear()
+    audio2.say("Chair ahead.", Priority.ADVISORY)
+    check("ordinary speech does not interrupt", not audio2._interrupt.is_set(),
+          str(audio2._interrupt.is_set()))
+
+    check("the alarm phrase can be prewarmed",
+          hasattr(audio2, "prewarm"), "no prewarm")
 
 
 def main() -> int:
@@ -915,6 +970,7 @@ def main() -> int:
     test_stop_gives_an_exit()
     test_sos()
     test_demo_mode()
+    test_sos_preempts_speech()
     print("=" * 60)
     if FAILS:
         print(f" {len(FAILS)} FAILED: {', '.join(FAILS)}")

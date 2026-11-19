@@ -68,6 +68,11 @@ class SmartCane:
 
         self.sos_button.start()
 
+        # Synthesise the alarm before it is needed. Pressing the button must
+        # not also wait for espeak-ng to start.
+        self.audio.prewarm([build_message(self.link.state()),
+                            config.STARTUP_GREETING])
+
         self.audio.say(config.STARTUP_GREETING, Priority.INFO, earcon="ok")
         log.info("ready - camera=%s serial=%s tts=%s vision=%s input=%s",
                  self.camera.backend, self.link.state().source,
@@ -336,14 +341,15 @@ class SmartCane:
     # -- SOS ---------------------------------------------------------------
     def _on_sos_press(self) -> None:
         """Button pressed: alarm on. Pressed again while active: cancel."""
-        if self.sos.cancel():
-            # In RPi.GPIO mode this is a second falling edge, i.e. a new press
-            # while the alarm is already running - treat it as "I am safe".
+        result = self.sos.handle_press()
+        if result is None:
+            log.debug("SOS press ignored (bounce)")
+            return
+        if result == "cancelled":
             self.audio.say("Emergency alarm cancelled.", Priority.ANSWER)
             log.warning("SOS cancelled by button")
             return
         now = time.monotonic()
-        self.sos.trigger(now)
         # Interrupt whatever is being said. This is the one thing that may
         # override an active warning.
         self._speak_sos(now)

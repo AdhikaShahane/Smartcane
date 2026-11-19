@@ -175,6 +175,7 @@ class SosAlarm:
         self.active = False
         self.started_at = 0.0
         self._last_spoken = 0.0
+        self._last_event_at = -1e9
 
     def trigger(self, now: float | None = None) -> bool:
         """Turn the alarm on. Returns True if it was not already on."""
@@ -185,6 +186,22 @@ class SosAlarm:
         self.started_at = now
         self._last_spoken = 0.0            # force an immediate announcement
         return True
+
+    def handle_press(self, now: float | None = None) -> str | None:
+        """One press = raise, next press = cancel, bounce = ignore.
+
+        Returns "triggered", "cancelled", or None when the press was too soon
+        after the last one to be a real, separate press.
+        """
+        now = now if now is not None else time.monotonic()
+        if (now - self._last_event_at) < config.SOS_DEBOUNCE_SEC:
+            return None
+        self._last_event_at = now
+        if self.active:
+            self.cancel()
+            return "cancelled"
+        self.trigger(now)
+        return "triggered"
 
     def cancel(self) -> bool:
         if not self.active:

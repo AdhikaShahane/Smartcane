@@ -443,12 +443,16 @@ STARTUP_GREETING = "Sahayak Drishti ready."
 # Change the pin here, or with SMARTCANE_SOS_PIN, without touching the code.
 SOS_ENABLED = os.getenv("SMARTCANE_SOS", "1").strip() not in ("0", "off", "no")
 SOS_PIN = int(os.getenv("SMARTCANE_SOS_PIN", "17"))
-SOS_BOUNCE_SEC = 0.15        # ignore contact chatter from a cheap button
+SOS_BOUNCE_SEC = 0.06        # ignore contact chatter from a cheap button
 # How often to repeat the alarm while it is active. A blind user cannot see
 # that help is on the way, so silence looks like failure.
 SOS_REPEAT_SEC = 6.0
 # Hold the button this long to cancel the alarm.
 SOS_CANCEL_HOLD_SEC = 1.5
+# Two presses closer together than this are treated as one. Without it, a
+# bouncy button fires twice and the second press CANCELS the alarm it just
+# raised - the worst possible failure for a panic button.
+SOS_DEBOUNCE_SEC = 0.8
 
 # The alarm text. {location} is replaced by the real location sentence, which
 # is honest: without a GPS fix it says so rather than claiming anything was
@@ -474,5 +478,4 @@ DEMO_MODE = os.getenv("SMARTCANE_DEMO", "0").strip().lower() not in (
 
 SOS_DEMO_MESSAGE = os.getenv(
     "SMARTCANE_SOS_DEMO_MESSAGE",
-    "Emergency! S O S activated. Your location has been shared with your "
-    "emergency contact.")
+    "Emergency! S O S button pressed. Your live location has been shared.")
