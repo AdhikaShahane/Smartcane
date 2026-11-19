@@ -51,66 +51,133 @@ DETECT_FPS = 8            # inference target; tracking fills the gaps
 FOCAL_PX = float(os.getenv("SMARTCANE_FOCAL", "615"))
 
 # ---------------------------------------------------------------------------
-# COCO classes
+# ADE20K taxonomic model  (replaces COCO)
 # ---------------------------------------------------------------------------
-# Everything the detector can NAME. The model was trained on these 80 classes
-# and nothing else, so this is the honest ceiling: it cannot see a door, a
-# stair, a curb or a pole, because COCO does not contain them.
-OBSTACLE_CLASSES = {
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
-    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
-    "baseball bat", "baseball glove", "skateboard", "surfboard",
-    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
-    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
-    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
-    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
+# COCO has no door, wall, floor, stairs, sidewalk or path - the classes a blind
+# pedestrian actually collides with. ADE20K is a scene-parsing dataset with 150
+# classes including all of them, so the cane can reason about *where it can
+# walk* instead of only naming objects.
+#
+# IDs below are the official ADE20K train IDs from object150_info.csv.
+
+# Ground you can walk on. This is the single most useful output of the whole
+# system: "is the floor here" answers "can I step here" without needing to
+# recognise what is in the way.
+WALKABLE_IDS = {
+    4,    # floor;flooring
+    7,    # road;route
+    10,   # grass
+    12,   # sidewalk;pavement
+    14,   # earth;ground
+    29,   # rug;carpet  (indoor floor covering)
+    53,   # path
+    95,   # land;ground;soil
 }
 
-# The subset worth WARNING about while walking. Everything else can still be
-# named when asked ("what is in front of me") but must not fill the air with
-# "cup ahead, cup ahead" while the user is trying to cross a road.
-HAZARD_CLASSES = {
-    "person", "bicycle", "car", "motorcycle", "bus", "train", "truck",
-    "boat", "bench", "chair", "couch", "dining table", "bed", "toilet",
-    "refrigerator", "oven", "potted plant", "dog", "horse", "cow", "sheep",
-    "suitcase", "backpack", "fire hydrant", "stop sign", "traffic light",
-    "parking meter", "tv", "vase", "teddy bear",
+# Walkable, but a trip hazard. Treated as an obstacle that also gets named.
+STAIR_IDS = {
+    54,   # stairs;steps
+    60,   # stairway;staircase
+    97,   # escalator;moving staircase
+    122,  # step;stair
 }
 
-# Real-world height (metres) used for monocular distance estimation.
-# Anything missing here is still detected and named, just without a distance.
-OBJ_HEIGHTS = {
-    "person": 1.70, "bicycle": 1.00, "car": 1.50, "motorcycle": 1.10,
-    "bus": 3.00, "truck": 3.00, "train": 3.50, "boat": 2.00,
-    "traffic light": 1.00, "fire hydrant": 0.75, "stop sign": 0.75,
-    "parking meter": 1.30, "bench": 0.45,
-    "bird": 0.15, "cat": 0.25, "dog": 0.50, "horse": 1.60, "sheep": 0.80,
-    "cow": 1.40, "elephant": 2.50, "bear": 1.20, "zebra": 1.40,
-    "giraffe": 3.00,
-    "backpack": 0.50, "umbrella": 0.90, "handbag": 0.25, "tie": 0.30,
-    "suitcase": 0.65, "skis": 1.20, "snowboard": 1.00, "surfboard": 1.20,
-    "baseball bat": 0.80, "baseball glove": 0.30, "skateboard": 0.20,
-    "tennis racket": 0.60, "kite": 0.50, "frisbee": 0.10,
-    "bottle": 0.25, "wine glass": 0.20, "cup": 0.10, "fork": 0.20,
-    "knife": 0.25, "spoon": 0.18, "bowl": 0.08,
-    "banana": 0.18, "apple": 0.08, "sandwich": 0.10, "orange": 0.08,
-    "broccoli": 0.15, "carrot": 0.20, "hot dog": 0.10, "pizza": 0.04,
-    "donut": 0.08, "cake": 0.15,
-    "chair": 0.85, "couch": 0.80, "potted plant": 0.60, "bed": 0.50,
-    "dining table": 0.75, "toilet": 0.70,
-    "tv": 0.60, "laptop": 0.25, "mouse": 0.05, "remote": 0.03,
-    "keyboard": 0.03, "cell phone": 0.15,
-    "microwave": 0.30, "oven": 0.70, "toaster": 0.20, "sink": 0.20,
-    "refrigerator": 1.70, "book": 0.25, "clock": 0.30, "vase": 0.30,
-    "scissors": 0.18, "teddy bear": 0.30, "hair drier": 0.20,
-    "toothbrush": 0.18,
+# Things that physically stop you, and looking up they tell you where the walls
+# are. Doors are here because a closed door is a wall you can walk through.
+BARRIER_IDS = {
+    1,    # wall
+    9,    # windowpane;window
+    15,   # door;double door
+    33,   # fence;fencing
+    39,   # railing;rail
+    43,   # column;pillar
+    59,   # screen door
 }
+
+# Objects that move through the world and can hit you.
+MOVER_IDS = {
+    13,   # person
+    21,   # car
+    81,   # bus
+    84,   # truck
+    103,  # van
+    127,  # animal
+    128,  # bicycle
+}
+
+# Furniture and street clutter worth avoiding.
+CLUTTER_IDS = {
+    11, 16, 18, 20, 25, 31, 34, 42, 44, 46, 51, 56, 63, 65, 70, 71,
+    76, 88, 100, 113, 116, 137, 139,
+}
+
+# Everything we are willing to *name* as an obstacle.
+HAZARD_IDS = BARRIER_IDS | MOVER_IDS | CLUTTER_IDS | STAIR_IDS
+
+# Classes that count as background and must never be treated as obstacles.
+IGNORE_IDS = {2, 3, 5, 6}          # building, sky, tree, ceiling
+
+# Human-readable names for the classes we act on. Anything not listed still
+# forms part of the obstacle mask, it just is not spoken by name.
+ADE20K_NAMES = {
+    1: "wall", 4: "floor", 7: "road", 9: "window", 10: "grass",
+    12: "sidewalk", 13: "person", 14: "ground", 15: "door",
+    16: "table", 18: "plant", 20: "chair", 21: "car", 25: "shelf",
+    29: "carpet", 31: "armchair", 33: "fence", 34: "desk", 39: "railing",
+    42: "box", 43: "pillar", 44: "sign", 46: "counter", 51: "refrigerator",
+    53: "path", 54: "stairs", 56: "display case", 60: "stairway",
+    63: "bookcase", 65: "table", 70: "bench", 71: "countertop",
+    76: "chair", 81: "bus", 84: "truck", 88: "street light",
+    95: "ground", 97: "escalator", 103: "van", 113: "basket",
+    116: "bag", 122: "step", 127: "animal", 128: "bicycle",
+    137: "traffic light", 139: "bin",
+}
+
+# Real-world height (metres) for classes where a monocular estimate is
+# meaningful. Stuff classes (wall, floor, path) are deliberately absent: their
+# bounding box spans the frame, so a height-based distance would be nonsense.
+ADE20K_HEIGHTS = {
+    "person": 1.70, "car": 1.50, "bus": 3.00, "truck": 3.00, "van": 1.90,
+    "bicycle": 1.00, "animal": 0.60,
+    "door": 2.00, "window": 1.20, "fence": 1.20, "railing": 1.00,
+    "pillar": 2.50, "wall": 2.50,
+    "chair": 0.85, "armchair": 0.90, "table": 0.75, "desk": 0.75,
+    "shelf": 1.60, "bookcase": 1.70, "cabinet": 1.20, "bench": 0.45,
+    "counter": 0.90, "countertop": 0.95, "refrigerator": 1.70,
+    "box": 0.40, "bag": 0.45, "basket": 0.30, "bin": 0.70,
+    "sign": 1.00, "street light": 4.00, "traffic light": 1.00,
+    "plant": 0.60, "display case": 1.20,
+    "stairs": 1.00, "stairway": 2.00, "step": 0.18, "escalator": 1.00,
+}
+
+# ---------------------------------------------------------------------------
+# SEGMENTATION MODEL
+# ---------------------------------------------------------------------------
+# Tried in order; the first that exists wins. tools/fetch_model.py downloads
+# the pretrained ADE20K semantic model, or you train your own with
+# tools/train_segmentation.py.
+SEG_MODEL_CANDIDATES = [
+    MODEL_DIR / "yolo11n-sem-ade20k.pt",
+    MODEL_DIR / "yolo26n-sem-ade20k.pt",
+    MODEL_DIR / "smartcane-seg.pt",
+    MODEL_DIR / "ade20k-seg.onnx",
+]
+SEG_IMGSZ = 256           # segmentation is heavier than detection; 256 is the
+                          # sweet spot on a Pi 4
+SEG_CONF = 0.30
+# A coarse occupancy grid turns the mask into "can I walk here" cheaply.
+GRID_W, GRID_H = 15, 12   # 15 divides into three equal 5-column zones
+# Fraction of blocked cells that makes a zone unusable.
+ZONE_BLOCKED_FRACTION = 0.35
+# Minimum walkable fraction for a side to be offered as a way around.
+ZONE_USABLE_FRACTION = 0.55
+
+# ---------------------------------------------------------------------------
+# Derived name sets (kept in sync with the ID sets above)
+# ---------------------------------------------------------------------------
+HAZARD_NAMES = {ADE20K_NAMES[i] for i in HAZARD_IDS if i in ADE20K_NAMES}
+WALKABLE_NAMES = {ADE20K_NAMES[i] for i in WALKABLE_IDS if i in ADE20K_NAMES}
+STAIR_NAMES = {ADE20K_NAMES[i] for i in STAIR_IDS if i in ADE20K_NAMES}
 CORRIDOR_LEFT = 0.30
 CORRIDOR_RIGHT = 0.70
 ZONE_HYSTERESIS = 0.04    # deadband so objects do not flicker left/right

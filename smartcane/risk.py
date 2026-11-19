@@ -219,6 +219,21 @@ def assess_scene(scene: Scene | None, sensor_dist_m: float | None = None
                     confidence=1.0,
                     reason="something is %.1f metres ahead" % sensor_dist_m))
 
+    # Measured free space. This is the one signal that does not depend on
+    # recognising anything: if the walkable surface ahead is gone, something is
+    # there whether or not the model can name it.
+    free = getattr(scene, "free_space", None) if scene is not None else None
+    if free is not None and getattr(free, "valid", False) and free.center_blocked:
+        explained = any(r.in_path and r.level >= RiskLevel.MEDIUM
+                        for r in report.objects)
+        if not explained:
+            report.objects.append(Risk(
+                level=RiskLevel.MEDIUM, label="obstacle", dist_m=None,
+                zone="center", in_path=True, source="segmentation",
+                confidence=1.0,
+                reason="the walking surface ahead is blocked (%.0f%% walkable)"
+                       % (free.center * 100.0)))
+
     if report.objects:
         ranked = sorted(
             report.objects,

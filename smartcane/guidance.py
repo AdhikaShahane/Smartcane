@@ -327,9 +327,19 @@ class Guidance:
                 "The path looks clear.")
 
     def best_direction(self, scene) -> str | None:
-        """Which side has more room? Used when the way ahead is blocked."""
+        """Which side has more room?
+
+        Prefers *measured* free space from the segmentation mask over the
+        old heuristic of "nothing was detected there, so probably fine".
+        """
         if scene is None:
             return None
+        free = getattr(scene, "free_space", None)
+        if free is not None and getattr(free, "valid", False):
+            # A measured answer is final: if neither side is walkable, say so
+            # rather than falling back to guesswork.
+            return free.best_side
+
         left = scene.nearest("left", hazard_only=True)
         right = scene.nearest("right", hazard_only=True)
         left_m = left.dist_m if (left and left.dist_m is not None) else 99.0

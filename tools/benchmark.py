@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Measure the parts of the pipeline that run on the CPU.
 
 Object detection needs PyTorch/ultralytics and is measured separately on the
@@ -25,11 +25,11 @@ from smartcane.vision import Scene, TrackedObject               # noqa: E402
 
 def build_scene(count: int = 6) -> Scene:
     scene = Scene(at=1.0, frame_width=640, frame_height=480)
-    labels = ["person", "chair", "table", "bottle", "dog", "car"]
+    labels = ["person", "chair", "table", "door", "wall", "car"]
     zones = ["center", "left", "right", "left", "right", "center"]
     for i in range(count):
         label = labels[i % len(labels)]
-        real_h = config.OBJ_HEIGHTS.get(label, 1.0)
+        real_h = config.ADE20K_HEIGHTS.get(label, 1.0)
         dist = 1.0 + i * 0.8
         box_h = real_h * config.FOCAL_PX / dist
         obj = TrackedObject(

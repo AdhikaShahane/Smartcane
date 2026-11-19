@@ -49,7 +49,7 @@ def make_object(label: str, zone: str, dist: float, conf: float = 0.9,
     overlap says "in the path" for an object that is plainly off to the side.
     """
     cx = {"center": 320.0, "left": 100.0, "right": 540.0}.get(zone, 320.0)
-    real_h = config.OBJ_HEIGHTS.get(label, 1.0)
+    real_h = config.ADE20K_HEIGHTS.get(label, 1.0)
     box_h = real_h * config.FOCAL_PX / max(0.3, dist)
     obj = TrackedObject(tid=1, label=label, x=cx, y=240, box_h=box_h,
                         box_w=box_h * 0.6, zone=zone, hits=5,
@@ -187,8 +187,7 @@ def s7_multiple_obstacles() -> None:
     person = make_object("person", "center", 1.3)
     chair = make_object("chair", "right", 1.5)
     chair.tid = 2
-    table = make_object("table" if "table" in config.OBJ_HEIGHTS
-                        else "dining table", "left", 2.0)
+    table = make_object("table", "left", 2.0)
     table.tid = 3
     scene = scene_with(person, chair, table)
     text = g.describe_all(Sensor(1.3), scene)
@@ -291,9 +290,51 @@ def s13_contradiction() -> None:
     check("mentions exactly one direction", len(turns) <= 1, str(turns))
 
 
+def s14_free_space() -> None:
+    print("\n[14] Measured free space decides the direction")
+    from smartcane.segmentation import free_space_from_mask, synthetic_mask
+
+    g = Guidance(step_len=0.65)
+    scene = scene_with()
+    scene.free_space = free_space_from_mask(synthetic_mask(blocked="center"))
+    direction = g.best_direction(scene)
+    show(f"{scene.free_space.describe()} -> turn {direction}")
+    check("measured free space picks the open side",
+          direction == "left", str(direction))
+
+    blocked = scene_with()
+    blocked.free_space = free_space_from_mask(synthetic_mask(blocked="all"))
+    d2 = g.best_direction(blocked)
+    show(f"{blocked.free_space.describe()} -> turn {d2}")
+    check("fully blocked offers no direction", d2 is None, str(d2))
+
+    report = assess_scene(scene)
+    check("a blocked walking surface raises a risk even unnamed",
+          report.level >= RiskLevel.MEDIUM, report.level.word)
+
+
+def s15_door_and_wall() -> None:
+    print("\n[15] Door and wall - classes that do not exist in COCO")
+    g = Guidance(step_len=0.65)
+    scene = scene_with(make_object("door", "center", 1.0))
+    risk = assess_object(scene.objects[0], scene)
+    text = g.describe(Sensor(None), scene)
+    show(text)
+    check("door is detected and named", "door" in text.lower(), text)
+    check("door in the path is a hazard",
+          risk.level >= RiskLevel.MEDIUM, risk.level.word)
+
+    wall = scene_with(make_object("wall", "left", 1.5))
+    r2 = assess_object(wall.objects[0], wall)
+    check("wall is classified", r2.level >= RiskLevel.LOW, r2.level.word)
+    stairs = scene_with(make_object("stairs", "center", 1.4))
+    r3 = assess_object(stairs.objects[0], stairs)
+    check("stairs are a hazard", r3.level >= RiskLevel.MEDIUM, r3.level.word)
+
+
 def main() -> int:
     print("=" * 66)
-    print(" Sahayak Drishti - scenario tests")
+    print(" Sahayak Drishti - scenario tests (ADE20K)")
     print("=" * 66)
     s1_chair_safe()
     s2_chair_blocking()
@@ -308,6 +349,8 @@ def main() -> int:
     s11_passed()
     s12_uncertain()
     s13_contradiction()
+    s14_free_space()
+    s15_door_and_wall()
 
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     failed = [name for name, ok, _ in RESULTS if not ok]

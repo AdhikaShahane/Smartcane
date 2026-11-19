@@ -18,6 +18,8 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from . import config
+from .segmentation import (FreeSpace, SegDetector, free_space_from_mask,
+                           mask_to_objects)
 from .util import StoppableThread, clamp, get_logger
 
 log = get_logger("vision")
@@ -121,6 +123,9 @@ class Scene:
     objects: list[TrackedObject] = field(default_factory=list)
     frame_width: int = config.CAM_WIDTH
     frame_height: int = config.CAM_HEIGHT
+    # Measured walkable fraction per zone, when the segmentation model is
+    # running. None means "not measured", which is different from "clear".
+    free_space = None
     at: float = 0.0
     infer_ms: float = 0.0
     backend: str = "none"
@@ -137,7 +142,7 @@ class Scene:
         """
         pool = [o for o in self.objects if o.zone == "center" and o.confirmed]
         if hazard_only:
-            pool = [o for o in pool if o.label in config.HAZARD_CLASSES]
+            pool = [o for o in pool if o.label in config.HAZARD_NAMES]
         return pool
 
     def nearest(self, zone: str | None = None,
@@ -145,7 +150,7 @@ class Scene:
         pool = [o for o in self.objects
                 if o.confirmed and (zone is None or o.zone == zone)]
         if hazard_only:
-            pool = [o for o in pool if o.label in config.HAZARD_CLASSES]
+            pool = [o for o in pool if o.label in config.HAZARD_NAMES]
         if not pool:
             return None
         return min(pool, key=lambda o: (o.dist_m if o.dist_m else 99.0))
@@ -166,7 +171,7 @@ def estimate_distance(label: str, box_h: float,
     frame width. Without this correction every distance is wrong by that
     ratio -- a person 2 m away reads as 1 m at 1280 wide.
     """
-    real_h = config.OBJ_HEIGHTS.get(label)
+    real_h = config.ADE20K_HEIGHTS.get(label)
     if real_h is None or box_h <= 4:
         return None
     f_px = config.FOCAL_PX * (max(1, frame_width) / float(config.CAM_WIDTH))
@@ -263,8 +268,6 @@ class Detector:
                 try:
                     cls_id = int(box.cls[0])
                     label = self.names.get(cls_id, str(cls_id))
-                    if label not in config.OBSTACLE_CLASSES:
-                        continue
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     out.append(Detection(label, x1, y1, x2, y2,
                                          float(box.conf[0])))
@@ -278,6 +281,8 @@ class Vision:
         self.camera = camera
         self.mock = mock
         self.detector = Detector()
+        self.seg = SegDetector()
+        self.backend = "none"
         self.enabled = False
         self._scene = Scene()
         self._lock = threading.Lock()
@@ -286,7 +291,23 @@ class Vision:
         self._next_id = 1
 
     def start(self) -> None:
-        self.enabled = self.detector.load() and not self.mock
+        if self.mock:
+            self.enabled = False
+            self.backend = "none"
+        elif self.seg.load():
+            self.backend = "segmentation"
+            self.enabled = True
+        elif self.detector.load():
+            # Legacy COCO detection kept as an explicit fallback so the cane
+            # still works if the ADE20K model is missing. It cannot see doors,
+            # walls or stairs, so it is a degraded mode by definition.
+            self.backend = "detection(legacy)"
+            self.enabled = True
+            log.warning("falling back to COCO detection: doors, walls and "
+                        "stairs will NOT be recognised")
+        else:
+            self.enabled = False
+            self.backend = "none"
         if not self.enabled:
             log.warning("vision disabled - ultrasonic-only mode")
         self._thread = _VisionLoop(self)
@@ -301,10 +322,41 @@ class Vision:
             return self._scene
 
     # -- internals ---------------------------------------------------------
+    def _from_segmentation(self, image) -> tuple[list[Detection],
+                                                 FreeSpace | None]:
+        """Run the ADE20K model and derive boxes plus measured free space."""
+        mask = self.seg.infer(image)
+        if mask is None:
+            return [], None
+
+        free = free_space_from_mask(mask)
+        objects = mask_to_objects(mask)
+
+        # The mask is produced at the model's resolution, the frame is not.
+        h, w = image.shape[:2]
+        mh, mw = mask.shape[:2]
+        sx = w / float(mw) if mw else 1.0
+        sy = h / float(mh) if mh else 1.0
+
+        detections = [
+            Detection(label=o.label, x1=o.x1 * sx, y1=o.y1 * sy,
+                      x2=o.x2 * sx, y2=o.y2 * sy, conf=o.fill)
+            for o in objects
+        ]
+        return detections, free
+
     def process(self, image) -> Scene:
         started = time.monotonic()
         h, w = image.shape[:2]
-        detections = self.detector.detect(image) if self.enabled else []
+
+        free_space = None
+        if not self.enabled:
+            detections: list[Detection] = []
+        elif self.backend == "segmentation":
+            detections, free_space = self._from_segmentation(image)
+        else:
+            detections = self.detector.detect(image)
+
         now = time.monotonic()
         self._update_tracks(detections, now, w)
 
@@ -316,7 +368,8 @@ class Vision:
 
         scene = Scene(objects=objects, frame_width=w, frame_height=h,
                       at=now, infer_ms=(now - started) * 1000.0,
-                      backend=self.detector.backend)
+                      backend=self.backend)
+        scene.free_space = free_space
         with self._lock:
             self._scene = scene
         return scene
