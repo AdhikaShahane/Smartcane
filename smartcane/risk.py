@@ -153,8 +153,13 @@ def assess_object(obj: TrackedObject, scene: Scene,
     # to escalate on size alone either.
     if (in_path and dist is None and not uncertain
             and size_ratio >= config.RISK_BLOCKING_SIZE):
-        risk.level = RiskLevel.CRITICAL
-        risk.reason = "filling the view ahead"
+        # Only stop the user hard for something we can actually name. An
+        # unnamed blob is a caution, because the ultrasonic already covers the
+        # "something is right in front of you" case with a real measurement.
+        named = obj.spoken_label != "obstacle"
+        risk.level = RiskLevel.CRITICAL if named else RiskLevel.MEDIUM
+        risk.reason = ("filling the view ahead"
+                       if named else "large obstacle, distance unknown")
         return risk
 
     # ------------------------------------------------------------------ MEDIUM
