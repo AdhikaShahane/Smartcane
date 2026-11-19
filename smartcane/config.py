@@ -482,3 +482,15 @@ DEMO_MODE = os.getenv("SMARTCANE_DEMO", "0").strip().lower() not in (
 SOS_DEMO_MESSAGE = os.getenv(
     "SMARTCANE_SOS_DEMO_MESSAGE",
     "Emergency! S O S button pressed. Your live location has been shared.")
+# ---------------------------------------------------------------------------
+# CAMERA RECONNECT
+# ---------------------------------------------------------------------------
+# A phone-operated IP camera is the least reliable part of the rig: the phone
+# sleeps, WiFi drops, the app gets killed. For an unattended boot the cane has
+# to recover by itself rather than run blind.
+CAM_RECONNECT_AFTER = 15        # failed frames before trying to reopen
+CAM_RECONNECT_INTERVAL_SEC = 5.0
+# When a real camera fails, publish nothing rather than a synthetic picture. A
+# fake moving block would be treated as a real obstacle by the detector, which
+# is worse than admitting the camera is down.
+CAM_SYNTHETIC_ON_LOSS = False

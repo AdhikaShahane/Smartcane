@@ -105,6 +105,9 @@ class Camera:
         self._index = 0
         self._cap = None
         self._picam = None
+        self._grab_failures = 0
+        self._last_reconnect = 0.0
+        self._ever_had_frames = False
 
     # -- public ------------------------------------------------------------
     def start(self) -> bool:
@@ -264,8 +267,49 @@ class Camera:
             return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
         if self._cap is not None:
             ok, frame = self._cap.read()
-            return frame if ok else None
+            if ok and frame is not None:
+                self._grab_failures = 0
+                self._ever_had_frames = True
+                return frame
+            self._note_grab_failure()
+            return None
         return None
+
+    @property
+    def lost(self) -> bool:
+        """True when a real camera was working and has now stopped."""
+        return self._ever_had_frames and self._grab_failures > 0
+
+    def _note_grab_failure(self) -> None:
+        """Reopen a camera that has gone away.
+
+        Phones sleep, WiFi drops, IP Webcam gets killed by the OS. Without this
+        the cane keeps running against a dead capture handle and the user gets
+        no indication at all.
+        """
+        self._grab_failures += 1
+        if self._grab_failures < config.CAM_RECONNECT_AFTER:
+            return
+        now = time.monotonic()
+        if now - self._last_reconnect < config.CAM_RECONNECT_INTERVAL_SEC:
+            return
+        self._last_reconnect = now
+        log.warning("camera lost (%d dead frames) - reconnecting",
+                    self._grab_failures)
+        self._reconnect()
+
+    def _reconnect(self) -> None:
+        try:
+            if self._cap is not None:
+                self._cap.release()
+        except Exception:                               # noqa: BLE001
+            pass
+        self._cap = None
+        self._grab_failures = 0
+        if self._open_real():
+            log.info("camera reconnected: %s", self.backend)
+        else:
+            log.warning("camera still unreachable")
 
     def _publish(self, image: np.ndarray) -> None:
         self._index += 1
@@ -289,6 +333,13 @@ class _CaptureLoop(StoppableThread):
             if self.cam.backend != "mock":
                 image = self.cam._grab()
             if image is None:
+                if self.cam.lost and not config.CAM_SYNTHETIC_ON_LOSS:
+                    # A real camera dropped mid-run. Publishing a synthetic
+                    # picture here would feed the detector a fake moving block
+                    # and turn it into a reported obstacle. Say nothing and
+                    # keep trying to reconnect instead.
+                    self.sleep(period)
+                    continue
                 image = self._synthetic()
             self.cam._publish(image)
             elapsed = time.monotonic() - start
